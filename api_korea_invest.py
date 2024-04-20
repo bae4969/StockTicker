@@ -51,11 +51,12 @@ class ApiKoreaInvestType:
 		
 	def __create_access_Token(self, app_key:str, app_secret:str):
 		try:
+			# 임시
 			self.__app_key = app_key
 			self.__app_secret = app_secret
-			self.__api_token_type = 'Bearer'
-			self.__api_token_val = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0b2tlbiIsImF1ZCI6IjllODAwMjhiLWIyMDItNDVlMi05MzczLTAxM2Q1NmYzMDA1MyIsInByZHRfY2QiOiIiLCJpc3MiOiJ1bm9ndyIsImV4cCI6MTcxMzY3OTU3MywiaWF0IjoxNzEzNTkzMTczLCJqdGkiOiJQU25aZmpVM1MydnFFaVlOZGpFQkowWm9zWkNxOXhMYlJEaTkifQ.oYmkBnGa8nLlHK5ZGmxWBEHxdbuyGvW9qYhuYqM-u3_5nYtJFWeoVa3XqvlijA8Ki0ERVWHPI0mqS800elE82w'
-			self.__api_token_valid_datetime = datetime.now()
+			self.__api_token_type = "Bearer"
+			self.__api_token_val = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0b2tlbiIsImF1ZCI6ImI3ZThhNjhiLTU3NjUtNDk0Yy04ZjhiLTJjZmQxNWRkZjQ0MSIsInByZHRfY2QiOiIiLCJpc3MiOiJ1bm9ndyIsImV4cCI6MTcxMzcyMzEzOSwiaWF0IjoxNzEzNjM2NzM5LCJqdGkiOiJQU25aZmpVM1MydnFFaVlOZGpFQkowWm9zWkNxOXhMYlJEaTkifQ.x96SHlPgzU8lyITdmMdeIbyCl7BlD5ynVcBuWs3fU-hc-o5lgNtbvkgfGYClZAqg4_6x86O9R1A0W85BPJTYSg"
+			self.__api_token_valid_datetime = datetime.strptime("2024-04-22 03:12:19", "%Y-%m-%d %H:%M:%S")
 			self.__api_header = {
 				"content-type" : "application/json; charset=utf-8",
 				"authorization" : self.__api_token_type + " " + self.__api_token_val,
@@ -63,9 +64,7 @@ class ApiKoreaInvestType:
 				"appsecret" : self.__app_secret,
 				"custtype" : "P"
 			}
-
 			return True
-
 
 			api_url = "/oauth2/tokenP"
 			api_params = {
@@ -100,6 +99,17 @@ class ApiKoreaInvestType:
 				"appsecret" : self.__app_secret,
 				"custtype" : "P"
 			}
+			
+			file_str_list = [
+				self.__api_token_type,
+				self.__api_token_val,
+				self.__api_token_valid_datetime.strftime("%Y-%m-%d %H:%M:%S")
+			]
+				
+			file = open("./doc/last_token_info.dat", 'w')
+			file.write("\n".join(file_str_list))
+			file.close()
+			
 
 			return True
 
@@ -415,12 +425,12 @@ class ApiKoreaInvestType:
 						rt_cd = msg_json["body"]["rt_cd"]
 
 						if rt_cd == '0':  # 정상일 경우 처리
-							print("\r### RETURN CODE [ %s ][ %s ] MSG [ %s ]\n>" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
+							print("\r### RETURN CODE [ %s ][ %s ] MSG [ %s ]\n> " % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
 						else:
-							print("\r### ERROR RETURN CODE [ %s ][ %s ] MSG [ %s ]\n>" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
+							print("\r### ERROR RETURN CODE [ %s ][ %s ] MSG [ %s ]\n> " % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
 
 			except:
-				print("\rError message\n>", end="")
+				print("\rError message\n> ", end="")
 			
 			self.__ws_send_lock.release()
 

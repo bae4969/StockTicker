@@ -293,9 +293,9 @@ class ApiKoreaInvestType:
 			volume = float(pValue[data_offset + 12])
 			
 			if pValue[data_offset + 21] == "1":
-				self.__update_stock_execution_table(stock_code, datetime, price, 0, volume, 0)
-			elif pValue[data_offset + 21] == "5":
 				self.__update_stock_execution_table(stock_code, datetime, price, 0, 0, volume)
+			elif pValue[data_offset + 21] == "5":
+				self.__update_stock_execution_table(stock_code, datetime, price, 0, volume, 0)
 			else:
 				self.__update_stock_execution_table(stock_code, datetime, price, volume, 0, 0)
 
@@ -311,8 +311,8 @@ class ApiKoreaInvestType:
 			datetime = datetime.strptime(stock_execution_datetime_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 11])
 			# volume = float(pValue[data_offset + 19])
-			ask_volume = float(pValue[data_offset + 22])
-			bid_volume = float(pValue[data_offset + 23])
+			bid_volume = float(pValue[data_offset + 22])
+			ask_volume = float(pValue[data_offset + 23])
 
 			self.__update_stock_execution_table(stock_code, datetime, price, 0, ask_volume, bid_volume)
 

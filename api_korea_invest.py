@@ -3,34 +3,36 @@ import websocket
 import pymysql
 import json
 import threading
-import asyncio
 from datetime import datetime
 from datetime import timedelta
 
-import websockets.connection
-
 
 class ApiKoreaInvestType:
-	__sql_connection = None
-	__app_key = ""
-	__app_secret = ""
+	__sql_connection:pymysql.Connection = None
+	__app_key:str = ""
+	__app_secret:str = ""
 
-	__API_BASE_URL = "https://openapi.koreainvestment.com:9443"
-	__api_token_type = ""
-	__api_token_val = ""
-	__api_token_valid_datetime = datetime.min
-	__api_header = {}
+	__API_BASE_URL:str = "https://openapi.koreainvestment.com:9443"
+	__api_token_type:str = ""
+	__api_token_val:str = ""
+	__api_token_valid_datetime:datetime = datetime.min
+	__api_header:dict = {}
 
-	__WS_BASE_URL = "ws://ops.koreainvestment.com:21000"
-	__ws_approval_key = ""
-	__ws_app = None
-	__ws_thread = None
-	__ws_send_lock = None
+	__WS_BASE_URL:str = "ws://ops.koreainvestment.com:21000"
+	__ws_approval_key:str = ""
+	__ws_app:websocket.WebSocketApp = None
+	__ws_thread:threading.Thread = None
+	__ws_send_lock:threading.Lock = threading.Lock()
 
+	__ws_sub_list = {
+		"stock_execution" : [],
+		"stock_orderbook" : [],
+		}
 
 	##########################################################################
 
-	def __create_sql_connection(self, sql_host, sql_id, sql_pw, sql_db):
+
+	def __create_sql_connection(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str):
 		try:
 			self.__sql_connection = pymysql.connect(
 				host = sql_host,
@@ -38,7 +40,8 @@ class ApiKoreaInvestType:
 				user = sql_id,
 				passwd = sql_pw,
 				db = sql_db,
-				charset = 'utf8'
+				charset = 'utf8',
+				autocommit=True
 			)
 
 			return True
@@ -46,7 +49,7 @@ class ApiKoreaInvestType:
 			self.__sql_connection = None
 			return False
 		
-	def __create_access_Token(self, app_key, app_secret):
+	def __create_access_Token(self, app_key:str, app_secret:str):
 		try:
 			self.__app_key = app_key
 			self.__app_secret = app_secret
@@ -135,7 +138,7 @@ class ApiKoreaInvestType:
 				self.__ws_send_lock = threading.Lock()
 				self.__ws_app = websocket.WebSocketApp(
 					url = self.__WS_BASE_URL,
-					on_message= self.__on_message_ws,
+					on_message= self.__on_recv_message_ws,
 					)
 				self.__ws_thread = threading.Thread(target=self.__ws_app.run_forever)
 				self.__ws_thread.start()
@@ -145,7 +148,7 @@ class ApiKoreaInvestType:
 		except:
 			return False
 
-	def Initialize(self, sql_host, sql_id, sql_pw, sql_db, app_key, app_secret):
+	def Initialize(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str, app_key:str, app_secret:str):
 		if self.__create_sql_connection(sql_host, sql_id, sql_pw, sql_db) == False:
 			print("Fail to create local SQL connection")
 			return False
@@ -156,89 +159,127 @@ class ApiKoreaInvestType:
 			print("Fail to create websocket app for API server")
 			return False
 
+
 	##########################################################################
  
-	def __create_stock_execution_table(self, stock_code: str):
+
+	def __create_stock_execution_table(self, stock_code:str):
 		table_name = stock_code.replace("/", "_")
 		raw_table_query_str = (
-			"CREATE TABLE IF NOT EXISTS 'stock_execution_raw_" + table_name +"' ("
-			+ "`execution_datetime` DATETIME NOT NULL,"
-			+ "`execution_price` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_volume` BIGINT(20) UNSIGNED NOT NULL DEFAULT '0'"
+			"CREATE TABLE IF NOT EXISTS stock_execution_raw_" + table_name + " ("
+			+ "execution_datetime DATETIME NOT NULL,"
+			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
 		candle_table_query_str = (
-			"CREATE TABLE IF NOT EXISTS `stock_execution_candle_" + table_name +"` ("
-			+ "`execution_datetime` DATETIME NOT NULL,"
-			+ "`execution_open` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_close` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_min` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_max` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_volume` BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_amount` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "PRIMARY KEY (`execution_datetime`) USING HASH"
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
+			"CREATE TABLE IF NOT EXISTS stock_execution_candle_" + table_name + " ("
+			+ "execution_datetime DATETIME NOT NULL,"
+			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "PRIMARY KEY (execution_datetime)"
+			+ ") COLLATE='utf8mb4_general_ci' ENGINE=MEMORY"
 		)
 
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(raw_table_query_str)
 		cursor.execute(candle_table_query_str)
-		self.__sql_connection.commit()
 
-	def __update_stock_execution(self, stock_code: str, datetime: datetime, price: float, volume: int):
+	def __update_stock_execution_table(self, stock_code:str, dt:datetime, price:float, non_volume:float, ask_volume:float, bid_volume:float):
 		table_name = stock_code.replace("/", "_")
-		datetime_00_min = datetime
-		datetime_10_min = datetime.replace(minute=datetime.minute // 10 * 10, second=0)
+		datetime_00_min = dt
+		datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
 		price_str = str(price)
-		volume_str = str(volume)
-		amount_str = str(price * volume)
+		non_volume_str = str(non_volume)
+		ask_volume_str = str(ask_volume)
+		bid_volume_str = str(bid_volume)
+		non_amount_str = str(price * non_volume)
+		ask_amount_str = str(price * ask_volume)
+		bid_amount_str = str(price * bid_volume)
 		
 		raw_table_query_str = (
-			"INSERT INTO " + table_name + " VALUES ("
+			"INSERT INTO stock_execution_raw_" + table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
-			+ "'" + volume_str + "'"
+			+ "'" + non_volume_str + "',"
+			+ "'" + ask_volume_str + "',"
+			+ "'" + bid_volume_str + "' "
 			+ ")"
 		)
 		candle_table_query_str = (
-			"INSERT INTO " + table_name + " VALUES ("
+			"INSERT INTO stock_execution_candle_" + table_name + " VALUES ("
 			+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
-			+ "'" + volume_str + "',"
-			+ "'" + amount_str + "'"
+			+ "'" + non_volume_str + "',"
+			+ "'" + ask_volume_str + "',"
+			+ "'" + bid_volume_str + "',"
+			+ "'" + non_amount_str + "',"
+			+ "'" + ask_amount_str + "',"
+			+ "'" + bid_amount_str + "' "
 			+ ") ON DUPLICATE KEY UPDATE "
 			+ "execution_close='" + price_str + "',"
 			+ "execution_min=LEAST(execution_min,'" + price_str + "'),"
 			+ "execution_max=GREATEST(execution_max,'" + price_str + "'),"
-			+ "execution_amount=execution_amount+'" + amount_str + "'"
+			+ "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
+			+ "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
+			+ "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
+			+ "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
+			+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
+			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
 		)
 
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(raw_table_query_str)
 		cursor.execute(candle_table_query_str)
-		self.__sql_connection.commit()
 
-	def __create_stock_orderbook_table(self, stock_code: str):
+
+	def __create_stock_orderbook_table(self, stock_code:str):
+		# TODO
+		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
 		table_name = stock_code.replace("/", "_")
 		orderbook_table_query_str = (
-			"CREATE TABLE IF NOT EXISTS 'stock_orderbook_" + table_name +"' ("
-			+ "`execution_datetime` DATETIME NOT NULL,"
-			+ "`execution_price` DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "`execution_volume` BIGINT(20) UNSIGNED NOT NULL DEFAULT '0'"
+			"CREATE TABLE IF NOT EXISTS stock_orderbook_" + table_name + " ("
+			+ "execution_datetime DATETIME NOT NULL,"
+			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0'"
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
 
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(orderbook_table_query_str)
-		self.__sql_connection.commit()
+
+	def __update_stock_orderbook_table(self, stock_code:str, dt:datetime, data):
+		# TODO
+		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
+		table_name = stock_code.replace("/", "_")
+		orderbook_table_query_str = (
+			"INSERT INTO stock_orderbook_" + table_name + " VALUES ("
+			+ "'" + dt.strftime("%Y-%m-%d %H:%M:%S") + "',"
+			+ "'" + data + "'"
+			+ ")"
+		)
+
+		cursor = self.__sql_connection.cursor()
+		cursor.execute(orderbook_table_query_str)
 
 
 	##########################################################################
   
-	def __on_recv_kr_stock_execution(self, data_cnt, data):
+
+	def __on_recv_kr_stock_execution(self, data_cnt:int, data:str):
     	# "유가증권단축종목코드|주식체결시간|주식현재가|전일대비부호|전일대비|전일대비율|가중평균주식가격|주식시가|주식최고가|주식최저가|매도호가1|매수호가1|체결거래량|누적거래량|누적거래대금|매도체결건수|매수체결건수|순매수체결건수|체결강도|총매도수량|총매수수량|체결구분|매수비율|전일거래량대비등락율|시가시간|시가대비구분|시가대비|최고가시간|고가대비구분|고가대비|최저가시간|저가대비구분|저가대비|영업일자|신장운영구분코드|거래정지여부|매도호가잔량|매수호가잔량|총매도호가잔량|총매수호가잔량|거래량회전율|전일동시간누적거래량|전일동시간누적거래량비율|시간구분코드|임의종료구분코드|정적VI발동기준가"
 		pValue = data.split('^')
 		for data_idx in range(data_cnt):
@@ -249,11 +290,16 @@ class ApiKoreaInvestType:
 			stock_code = pValue[data_offset + 0]
 			datetime = datetime.strptime(stock_execution_datetime_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 2])
-			volume = int(pValue[data_offset + 12])
+			volume = float(pValue[data_offset + 12])
+			
+			if pValue[data_offset + 21] == "1":
+				self.__update_stock_execution_table(stock_code, datetime, price, 0, volume, 0)
+			elif pValue[data_offset + 21] == "5":
+				self.__update_stock_execution_table(stock_code, datetime, price, 0, 0, volume)
+			else:
+				self.__update_stock_execution_table(stock_code, datetime, price, volume, 0, 0)
 
-			self.__update_stock_execution(stock_code, datetime, price, volume)
-
-	def __on_recv_ex_stock_execution(self, data_cnt, data):
+	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str):
     	# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
 		pValue = data.split('^')
 		for data_idx in range(data_cnt):
@@ -264,11 +310,14 @@ class ApiKoreaInvestType:
 			stock_code = pValue[data_offset + 1]
 			datetime = datetime.strptime(stock_execution_datetime_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 11])
-			volume = int(pValue[data_offset + 19])
+			# volume = float(pValue[data_offset + 19])
+			ask_volume = float(pValue[data_offset + 22])
+			bid_volume = float(pValue[data_offset + 23])
 
-			self.__update_stock_execution(stock_code, datetime, price, volume)
+			self.__update_stock_execution_table(stock_code, datetime, price, 0, ask_volume, bid_volume)
 
-	def __on_recv_kr_stock_orderbook(self, data):
+
+	def __on_recv_kr_stock_orderbook(self, data:str):
 		""" 넘겨받는데이터가 정상인지 확인
 		print("stockhoka[%s]"%(data))
 		"""
@@ -316,7 +365,7 @@ class ApiKoreaInvestType:
 		print("누적거래량             [%s]" % (recvvalue[53]))
 		print("주식매매 구분코드      [%s]" % (recvvalue[58]))
 		
-	def __on_recv_ex_stock_orderbook(self, data):
+	def __on_recv_ex_stock_orderbook(self, data:str):
 		""" 넘겨받는데이터가 정상인지 확인
 		print("stockhoka[%s]"%(data))
 		"""
@@ -338,24 +387,23 @@ class ApiKoreaInvestType:
 		print("매수잔량대비        [%s]" % (recvvalue[15]))
 		print("매도잔량대비        [%s]" % (recvvalue[16]))
 
-	def __on_message_ws(self, ws, msg):
+
+	def __on_recv_message_ws(self, ws:websocket.WebSocketApp, msg:str):
 			self.__ws_send_lock.acquire()
 			try:
 				if msg[0] == '0':
-					recvstr = msg.split('|')  # 수신데이터가 실데이터 이전은 '|'로 나뉘어져있어 split
+					 # 수신데이터가 실데이터 이전은 '|'로 나눠 있음
+					recvstr = msg.split('|') 
 					trid0 = recvstr[1]
 
-					if trid0 == "H0STCNT0":  # 국내 주식 체결
-						self.__on_recv_kr_stock_execution(int(recvstr[2]), recvstr[3])
-					
-					elif trid0 == "HDFSCNT0":  # 해외 주식 체결
-						self.__on_recv_ex_stock_execution(int(recvstr[2]), recvstr[3])
-	
-					elif trid0 == "H0STASP0":  # 국내 주식호가
-						self.__on_recv_kr_stock_orderbook(recvstr[3])
-
-					elif trid0 == "HDFSASP0":  # 해외 주식 호가
-						self.__on_recv_ex_stock_orderbook(recvstr[3])
+ 					# H0STCNT0 : 국내 주식 체결
+ 					# HDFSCNT0 : 해외 주식 체결
+ 					# H0STASP0 : 국내 주식 호가
+ 					# HDFSASP0 : 해외 주식 호가
+					if trid0 == "H0STCNT0": self.__on_recv_kr_stock_execution(int(recvstr[2]), recvstr[3])
+					elif trid0 == "HDFSCNT0": self.__on_recv_ex_stock_execution(int(recvstr[2]), recvstr[3])
+					elif trid0 == "H0STASP0": self.__on_recv_kr_stock_orderbook(recvstr[3])
+					elif trid0 == "HDFSASP0": self.__on_recv_ex_stock_orderbook(recvstr[3])
 
 				else:
 					msg_json = json.loads(msg)
@@ -367,67 +415,166 @@ class ApiKoreaInvestType:
 						rt_cd = msg_json["body"]["rt_cd"]
 
 						if rt_cd == '0':  # 정상일 경우 처리
-							print("### RETURN CODE [ %s ][ %s ] MSG [ %s ]" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+							print("\r### RETURN CODE [ %s ][ %s ] MSG [ %s ]\n>" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
 						else:
-							print("### ERROR RETURN CODE [ %s ][ %s ] MSG [ %s ]" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+							print("\r### ERROR RETURN CODE [ %s ][ %s ] MSG [ %s ]\n>" % (msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]), end="")
 
 			except:
-				print("Error message")
+				print("\rError message\n>", end="")
 			
 			self.__ws_send_lock.release()
 
-	##########################################################################
- 
-	def test_(self):
+	def __on_send_message_ws(self, is_reg:bool, api_code:str, stock_code:str):
+		if is_reg == True:
+			tr_type = "1"
+		else:
+			tr_type = "2"
+
 		msg = {
 			"header" : {
 				"approval_key": self.__ws_approval_key,
 				"content-type": "utf-8",
 				"custtype": "P",
-				"tr_type": "1"
+				"tr_type": tr_type
 			},
 			"body" : {
 				"input": {
-            		"tr_id": "H0STASP0",
-            		"tr_key": "005930"
+            		"tr_id": api_code,
+            		"tr_key": stock_code
         		}
 			}
 		}
-		
-		# print(json.dumps(msg))
 		self.__ws_app.send(json.dumps(msg))
- 
-	# def __add_websocket_query(self, api_add, api_code, api_stock_code):
-	# 	'{"header":{"approval_key": "%s","custtype":"P","tr_type":"%s","content-type":"utf-8"},"body":{"input":{"tr_id":"%s","tr_key":"%s"}}}'%(self.__api_approval_key,api_add,api_code,api_stock_code)
- 
-	# def AddStockExecution(self, stock_code, stock_market):
-	# 	api_code = ""
-	# 	api_stock_code = ""
 
-	# 	if stock_market == "NYSE":
-	# 		api_code = "HDFSCNT0"
-	# 		api_stock_code = "DNYS" + stock_code
-	# 	elif stock_market == "NASDAQ":
-	# 		api_code = "HDFSCNT0"
-	# 		api_stock_code = "DNAS" + stock_code
-	# 	else:
-	# 		api_code = "H0STCNT0"
-	# 		api_stock_code = stock_code
 
-	# 	api_query = self.__add_websocket_query("1", api_code, api_stock_code)
+	##########################################################################
+	
 
-	# 	self.__ws_query_list[] = ["H0STCNT0", stock_code]
- 
-	# def AddStockOrderbook(self, stock_code, stock_market):
-        
-	# 	api_code = ""
-        
-	# 	if stock_market == "NYSE":
-	# 		self.__stock_execution_query_list.append(["HDFSASP0", "DNYS" + stock_code])
-	# 	elif stock_market == "NASDAQ":
-	# 		self.__stock_execution_query_list.append(["HDFSASP0", "DNAS" + stock_code])
-	# 	else:
-	# 		self.__stock_execution_query_list.append(["H0STASP0", stock_code])
+	def FindStock(self, name:str):
+		query_str = (
+			"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
+			+ "FROM stock_info WHERE "
+			+ "stock_name_kr LIKE '%" + name + "%' or "
+			+ "stock_name_en LIKE '%" + name + "%' "
+			+ "ORDER BY stock_capitalization DESC"
+		)
+		cursor = self.__sql_connection.cursor()
+		cursor.execute(query_str)
+
+		return cursor.fetchall()
+
+	def GetKrStockList(self, cnt:int, offset:int = 0):
+		query_str = (
+			"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
+			+ "FROM stock_info WHERE "
+			+ "stock_market LIKE 'KOSPI%' or "
+			+ "stock_market LIKE 'KOSDAQ%' or "
+			+ "stock_market LIKE 'KONEX%' "
+			+ "ORDER BY stock_capitalization DESC "
+			+ "LIMIT " + str(offset) + " " + str(cnt)
+		)
+		cursor = self.__sql_connection.cursor()
+		cursor.execute(query_str)
+
+		return cursor.fetchall()
+	
+	def GetUsStockList(self, cnt:int, offset:int = 0):
+		query_str = (
+			"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
+			+ "FROM stock_info WHERE "
+			+ "stock_market LIKE 'NYSE%' or "
+			+ "stock_market LIKE 'NASDAQ%' "
+			+ "ORDER BY stock_capitalization DESC "
+			+ "LIMIT " + str(offset) + " " + str(cnt)
+		)
+		cursor = self.__sql_connection.cursor()
+		cursor.execute(query_str)
+		
+		return cursor.fetchall()
+
+
+	def AddStockExecution(self, stock_code, stock_market):
+		try:
+			if stock_market == "NYSE":
+				api_code = "HDFSCNT0"
+				api_stock_code = "DNYS" + stock_code
+			elif stock_market == "NASDAQ":
+				api_code = "HDFSCNT0"
+				api_stock_code = "DNAS" + stock_code
+			else:
+				api_code = "H0STCNT0"
+				api_stock_code = stock_code
+
+			self.__create_stock_execution_table(stock_code)
+			self.__on_send_message_ws(True, api_code, api_stock_code)
+			self.__ws_sub_list["stock_execution"].append(stock_code)
+
+			return True
+		
+		except:
+			return False
+
+	def DelStockExecution(self, stock_code, stock_market):
+		try:
+			if stock_market == "NYSE":
+				api_code = "HDFSCNT0"
+				api_stock_code = "DNYS" + stock_code
+			elif stock_market == "NASDAQ":
+				api_code = "HDFSCNT0"
+				api_stock_code = "DNAS" + stock_code
+			else:
+				api_code = "H0STCNT0"
+				api_stock_code = stock_code
+
+			self.__on_send_message_ws(False, api_code, api_stock_code)
+			self.__ws_sub_list["stock_execution"].remove(stock_code)
+
+			return True
+		
+		except:
+			return False
+
+
+	def AddStockOrderbook(self, stock_code, stock_market):
+		try:
+			if stock_market == "NYSE":
+				api_code = "HDFSASP0"
+				api_stock_code = "DNYS" + stock_code
+			elif stock_market == "NASDAQ":
+				api_code = "HDFSASP0"
+				api_stock_code = "DNAS" + stock_code
+			else:
+				api_code = "H0STASP0"
+				api_stock_code = stock_code
+
+			self.__create_stock_orderbook_table(stock_code)
+			self.__on_send_message_ws(True, api_code, api_stock_code)
+			self.__ws_sub_list["stock_orderbook"].remove(stock_code)
+
+			return True
+		
+		except:
+			return False
+		
+	def DelStockOrderbook(self, stock_code, stock_market):
+		try:
+			if stock_market == "NYSE":
+				api_code = "HDFSASP0"
+				api_stock_code = "DNYS" + stock_code
+			elif stock_market == "NASDAQ":
+				api_code = "HDFSASP0"
+				api_stock_code = "DNAS" + stock_code
+			else:
+				api_code = "H0STASP0"
+				api_stock_code = stock_code
+
+			self.__on_send_message_ws(False, api_code, api_stock_code)
+			self.__ws_sub_list["stock_orderbook"].append(stock_code)
+
+			return True
+		
+		except:
+			return False
 
 	
 

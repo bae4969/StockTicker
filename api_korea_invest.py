@@ -169,6 +169,7 @@ class ApiKoreaInvestType:
 			print("Fail to create websocket app for API server")
 			return False
 
+		return True
 
 	##########################################################################
  
@@ -197,7 +198,7 @@ class ApiKoreaInvestType:
 			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "PRIMARY KEY (execution_datetime)"
+			+ "PRIMARY KEY (execution_datetime) USING BTREE"
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=MEMORY"
 		)
 
@@ -259,6 +260,8 @@ class ApiKoreaInvestType:
 	def __create_stock_orderbook_table(self, stock_code:str):
 		# TODO
 		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
+		return
+	
 		table_name = stock_code.replace("/", "_")
 		orderbook_table_query_str = (
 			"CREATE TABLE IF NOT EXISTS stock_orderbook_" + table_name + " ("
@@ -274,6 +277,8 @@ class ApiKoreaInvestType:
 	def __update_stock_orderbook_table(self, stock_code:str, dt:datetime, data):
 		# TODO
 		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
+		return
+
 		table_name = stock_code.replace("/", "_")
 		orderbook_table_query_str = (
 			"INSERT INTO stock_orderbook_" + table_name + " VALUES ("
@@ -295,19 +300,19 @@ class ApiKoreaInvestType:
 		for data_idx in range(data_cnt):
 			data_offset = 46 * data_idx
 
-			stock_execution_datetime_str = datetime.now().strftime("%Y%m%d") + pValue[data_offset + 1]
+			stock_execution_dt_str = datetime.now().strftime("%Y%m%d") + pValue[data_offset + 1]
 
 			stock_code = pValue[data_offset + 0]
-			datetime = datetime.strptime(stock_execution_datetime_str, "%Y%m%d%H%M%S")
+			dt = datetime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 2])
 			volume = float(pValue[data_offset + 12])
 			
 			if pValue[data_offset + 21] == "1":
-				self.__update_stock_execution_table(stock_code, datetime, price, 0, 0, volume)
+				self.__update_stock_execution_table(stock_code, dt, price, 0, 0, volume)
 			elif pValue[data_offset + 21] == "5":
-				self.__update_stock_execution_table(stock_code, datetime, price, 0, volume, 0)
+				self.__update_stock_execution_table(stock_code, dt, price, 0, volume, 0)
 			else:
-				self.__update_stock_execution_table(stock_code, datetime, price, volume, 0, 0)
+				self.__update_stock_execution_table(stock_code, dt, price, volume, 0, 0)
 
 	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str):
     	# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
@@ -315,16 +320,16 @@ class ApiKoreaInvestType:
 		for data_idx in range(data_cnt):
 			data_offset = 26 * data_idx
 
-			stock_execution_datetime_str = pValue[data_offset + 6] + " " + pValue[data_offset + 7]
+			stock_execution_dt_str = pValue[data_offset + 6] + " " + pValue[data_offset + 7]
 
 			stock_code = pValue[data_offset + 1]
-			datetime = datetime.strptime(stock_execution_datetime_str, "%Y%m%d%H%M%S")
+			dt = datetime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 11])
 			# volume = float(pValue[data_offset + 19])
 			bid_volume = float(pValue[data_offset + 22])
 			ask_volume = float(pValue[data_offset + 23])
 
-			self.__update_stock_execution_table(stock_code, datetime, price, 0, ask_volume, bid_volume)
+			self.__update_stock_execution_table(stock_code, dt, price, 0, ask_volume, bid_volume)
 
 
 	def __on_recv_kr_stock_orderbook(self, data:str):
@@ -503,7 +508,7 @@ class ApiKoreaInvestType:
 		return cursor.fetchall()
 
 
-	def AddStockExecution(self, stock_code, stock_market):
+	def AddStockExecution(self, stock_code:str, stock_market:str):
 		try:
 			if stock_market == "NYSE":
 				api_code = "HDFSCNT0"
@@ -524,7 +529,7 @@ class ApiKoreaInvestType:
 		except:
 			return False
 
-	def DelStockExecution(self, stock_code, stock_market):
+	def DelStockExecution(self, stock_code:str, stock_market:str):
 		try:
 			if stock_market == "NYSE":
 				api_code = "HDFSCNT0"
@@ -545,7 +550,7 @@ class ApiKoreaInvestType:
 			return False
 
 
-	def AddStockOrderbook(self, stock_code, stock_market):
+	def AddStockOrderbook(self, stock_code:str, stock_market:str):
 		try:
 			if stock_market == "NYSE":
 				api_code = "HDFSASP0"
@@ -566,7 +571,7 @@ class ApiKoreaInvestType:
 		except:
 			return False
 		
-	def DelStockOrderbook(self, stock_code, stock_market):
+	def DelStockOrderbook(self, stock_code:str, stock_market:str):
 		try:
 			if stock_market == "NYSE":
 				api_code = "HDFSASP0"

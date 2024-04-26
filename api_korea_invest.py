@@ -23,11 +23,13 @@ class ApiKoreaInvestType:
 	__ws_app:websocket.WebSocketApp = None
 	__ws_thread:threading.Thread = None
 	__ws_send_lock:threading.Lock = threading.Lock()
+	__ws_is_started = False
 
 	__ws_sub_list = {
 		"stock_execution" : [],
 		"stock_orderbook" : [],
 		}
+	__ws_ex_excution_last_volume = {}
 
 	##########################################################################
 
@@ -52,19 +54,19 @@ class ApiKoreaInvestType:
 	def __create_access_Token(self, app_key:str, app_secret:str):
 		try:
 			# 임시
-			self.__app_key = app_key
-			self.__app_secret = app_secret
-			self.__api_token_type = "Bearer"
-			self.__api_token_val = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0b2tlbiIsImF1ZCI6ImI3ZThhNjhiLTU3NjUtNDk0Yy04ZjhiLTJjZmQxNWRkZjQ0MSIsInByZHRfY2QiOiIiLCJpc3MiOiJ1bm9ndyIsImV4cCI6MTcxMzcyMzEzOSwiaWF0IjoxNzEzNjM2NzM5LCJqdGkiOiJQU25aZmpVM1MydnFFaVlOZGpFQkowWm9zWkNxOXhMYlJEaTkifQ.x96SHlPgzU8lyITdmMdeIbyCl7BlD5ynVcBuWs3fU-hc-o5lgNtbvkgfGYClZAqg4_6x86O9R1A0W85BPJTYSg"
-			self.__api_token_valid_datetime = datetime.strptime("2024-04-22 03:12:19", "%Y-%m-%d %H:%M:%S")
-			self.__api_header = {
-				"content-type" : "application/json; charset=utf-8",
-				"authorization" : self.__api_token_type + " " + self.__api_token_val,
-				"appkey" : self.__app_key,
-				"appsecret" : self.__app_secret,
-				"custtype" : "P"
-			}
-			return True
+			#self.__app_key = app_key
+			#self.__app_secret = app_secret
+			#self.__api_token_type = "Bearer"
+			#self.__api_token_val = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ0b2tlbiIsImF1ZCI6ImI3ZThhNjhiLTU3NjUtNDk0Yy04ZjhiLTJjZmQxNWRkZjQ0MSIsInByZHRfY2QiOiIiLCJpc3MiOiJ1bm9ndyIsImV4cCI6MTcxMzcyMzEzOSwiaWF0IjoxNzEzNjM2NzM5LCJqdGkiOiJQU25aZmpVM1MydnFFaVlOZGpFQkowWm9zWkNxOXhMYlJEaTkifQ.x96SHlPgzU8lyITdmMdeIbyCl7BlD5ynVcBuWs3fU-hc-o5lgNtbvkgfGYClZAqg4_6x86O9R1A0W85BPJTYSg"
+			#self.__api_token_valid_datetime = datetime.strptime("2024-04-22 03:12:19", "%Y-%m-%d %H:%M:%S")
+			#self.__api_header = {
+			#	"content-type" : "application/json; charset=utf-8",
+			#	"authorization" : self.__api_token_type + " " + self.__api_token_val,
+			#	"appkey" : self.__app_key,
+			#	"appsecret" : self.__app_secret,
+			#	"custtype" : "P"
+			#}
+			#return True
 
 			api_url = "/oauth2/tokenP"
 			api_params = {
@@ -320,16 +322,36 @@ class ApiKoreaInvestType:
 		for data_idx in range(data_cnt):
 			data_offset = 26 * data_idx
 
-			stock_execution_dt_str = pValue[data_offset + 6] + " " + pValue[data_offset + 7]
+			stock_execution_dt_str = pValue[data_offset + 6] + pValue[data_offset + 7]
 
 			stock_code = pValue[data_offset + 1]
 			dt = datetime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
 			price = float(pValue[data_offset + 11])
-			# volume = float(pValue[data_offset + 19])
-			bid_volume = float(pValue[data_offset + 22])
-			ask_volume = float(pValue[data_offset + 23])
+			tot_volume = float(pValue[data_offset + 19])
+			bid_volume_amount = float(pValue[data_offset + 22])
+			ask_volume_amount = float(pValue[data_offset + 23])
 
-			self.__update_stock_execution_table(stock_code, dt, price, 0, ask_volume, bid_volume)
+			ask_volume = 0.0
+			bid_volume = 0.0
+			if stock_code in self.__ws_ex_excution_last_volume:
+				last_volumes = self.__ws_ex_excution_last_volume[stock_code]
+				if bid_volume_amount >= last_volumes[0]:
+					bid_volume = bid_volume_amount - last_volumes[0]
+					self.__ws_ex_excution_last_volume[stock_code][0] = bid_volume_amount
+				else:
+					self.__ws_ex_excution_last_volume[stock_code][0] = 0.0
+				if ask_volume_amount >= last_volumes[1]:
+					ask_volume = ask_volume_amount - last_volumes[1]
+					self.__ws_ex_excution_last_volume[stock_code][1] = ask_volume_amount
+				else:
+					self.__ws_ex_excution_last_volume[stock_code][1] = 0.0
+			else:
+				self.__ws_ex_excution_last_volume[stock_code] = [0.0, 0.0]
+
+			if ask_volume + bid_volume == tot_volume:
+				self.__update_stock_execution_table(stock_code, dt, price, 0.0, ask_volume, bid_volume)
+			else:
+				self.__update_stock_execution_table(stock_code, dt, price, tot_volume, 0.0, 0.0)
 
 
 	def __on_recv_kr_stock_orderbook(self, data:str):
@@ -405,6 +427,7 @@ class ApiKoreaInvestType:
 
 	def __on_recv_message_ws(self, ws:websocket.WebSocketApp, msg:str):
 			self.__ws_send_lock.acquire()
+			self.__ws_is_started = True
 			try:
 				if msg[0] == '0':
 					 # 수신데이터가 실데이터 이전은 '|'로 나눠 있음
@@ -440,26 +463,32 @@ class ApiKoreaInvestType:
 			self.__ws_send_lock.release()
 
 	def __on_send_message_ws(self, is_reg:bool, api_code:str, stock_code:str):
-		if is_reg == True:
-			tr_type = "1"
-		else:
-			tr_type = "2"
+		self.__ws_send_lock.acquire()
+		try:
+			if is_reg == True:
+				tr_type = "1"
+			else:
+				tr_type = "2"
 
-		msg = {
-			"header" : {
-				"approval_key": self.__ws_approval_key,
-				"content-type": "utf-8",
-				"custtype": "P",
-				"tr_type": tr_type
-			},
-			"body" : {
-				"input": {
-            		"tr_id": api_code,
-            		"tr_key": stock_code
-        		}
+			msg = {
+				"header" : {
+					"approval_key": self.__ws_approval_key,
+					"content-type": "utf-8",
+					"custtype": "P",
+					"tr_type": tr_type
+				},
+				"body" : {
+					"input": {
+						"tr_id": api_code,
+						"tr_key": stock_code
+					}
+				}
 			}
-		}
-		self.__ws_app.send(json.dumps(msg))
+			self.__ws_app.send(json.dumps(msg))
+		except:
+			print("\rError message\n> ", end="")
+
+		self.__ws_send_lock.release()
 
 
 	##########################################################################
@@ -486,7 +515,7 @@ class ApiKoreaInvestType:
 			+ "stock_market LIKE 'KOSDAQ%' or "
 			+ "stock_market LIKE 'KONEX%' "
 			+ "ORDER BY stock_capitalization DESC "
-			+ "LIMIT " + str(offset) + " " + str(cnt)
+			+ "LIMIT " + str(offset) + ", " + str(cnt)
 		)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(query_str)
@@ -500,7 +529,7 @@ class ApiKoreaInvestType:
 			+ "stock_market LIKE 'NYSE%' or "
 			+ "stock_market LIKE 'NASDAQ%' "
 			+ "ORDER BY stock_capitalization DESC "
-			+ "LIMIT " + str(offset) + " " + str(cnt)
+			+ "LIMIT " + str(offset) + ", " + str(cnt)
 		)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(query_str)

@@ -16,6 +16,7 @@ class ApiBithumbType:
 	__ws_app:websocket.WebSocketApp = None
 	__ws_thread:threading.Thread = None
 	__ws_send_lock:threading.Lock = threading.Lock()
+	__ws_is_started = False
 
 	__ws_sub_list = {
 		"coin_execution" : [],
@@ -314,6 +315,7 @@ class ApiBithumbType:
 
 	def __on_recv_message_ws(self, ws:websocket.WebSocketApp, msg:str):
 			self.__ws_send_lock.acquire()
+			self.__ws_is_started = True
 			try:
 				msg_json = json.loads(msg)
 

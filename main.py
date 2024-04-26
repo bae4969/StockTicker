@@ -2,39 +2,45 @@ from api_korea_invest import ApiKoreaInvestType as API_KI
 from api_bithumb import ApiBithumbType as API_BH
 import doc.define as define
 import asyncio
+import time
 from datetime import datetime
 from datetime import timedelta
 
 
 async def main():
-    apiBH = API_BH()
-    if apiBH.Initialize(
-        define.SQL_HOST,
-        define.SQL_ID,
-        define.SQL_PW,
-        define.SQL_BH_DB,
-        ) == False:
-        return False
-    
-    print(">", end=" ")
-    user_str = input()
-    apiBH.AddCoinExecution("BTC")
-
-    print(">", end=" ")
-    user_str = input()
-    apiBH.DelCoinExecution("BTC")
-
-
-    # apiKI = API_KI()
-    # if apiKI.Initialize(
+    # apiBH = API_BH()
+    # if apiBH.Initialize(
     #     define.SQL_HOST,
     #     define.SQL_ID,
     #     define.SQL_PW,
-    #     define.SQL_KI_DB,
-    #     define.APP_KEY,
-    #     define.APP_SECRET
+    #     define.SQL_BH_DB,
     #     ) == False:
     #     return False
+    
+    # print(">", end=" ")
+    # user_str = input()
+    # apiBH.AddCoinExecution("BTC")
+
+    # print(">", end=" ")
+    # user_str = input()
+    # apiBH.DelCoinExecution("BTC")
+
+
+    apiKI = API_KI()
+    if apiKI.Initialize(
+        define.SQL_HOST,
+        define.SQL_ID,
+        define.SQL_PW,
+        define.SQL_KI_DB,
+        define.APP_KEY,
+        define.APP_SECRET
+        ) == False:
+        return False
+    
+    time.sleep(3)
+    stockInfoList = apiKI.GetKrStockList(40)
+    for stockInfo in stockInfoList:
+        apiKI.AddStockExecution(stockInfo[0], stockInfo[3])
     
     # print("Success to initialize 'Korea Invest API'\n")
     

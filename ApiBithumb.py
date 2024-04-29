@@ -496,6 +496,18 @@ class ApiBithumbType:
 		except:
 			return -2
 
+	def DelStockExecutionQuery(self, coin_code:str):
+		try:
+			del self.__ws_sub_list["EX_" + coin_code]
+		except:
+			pass
+
+	def DelStockOrderbookQuery(self, coin_code:str):
+		try:
+			del self.__ws_sub_list["OB_" + coin_code]
+		except:
+			pass
+
 
 	def IsCollecting(self):
 		return self.__ws_is_opened

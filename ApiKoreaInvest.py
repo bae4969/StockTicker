@@ -711,6 +711,18 @@ class ApiKoreaInvestType:
 		except:
 			return -2
 		
+	def DelStockExecutionQuery(self, stock_code:str):
+		try:
+			del self.__ws_sub_list["EX_" + stock_code]
+		except:
+			pass
+
+	def DelStockOrderbookQuery(self, stock_code:str):
+		try:
+			del self.__ws_sub_list["OB_" + stock_code]
+		except:
+			pass
+
 
 	def IsCollecting(self):
 		return self.__ws_is_opened

@@ -29,6 +29,7 @@ class ApiKoreaInvestType:
 	__ws_sub_list:dict = {}
 	__ws_ex_excution_last_volume:dict = {}
 
+
 	##########################################################################
 
 
@@ -45,26 +46,103 @@ class ApiKoreaInvestType:
 		self.__app_key = app_key
 		self.__app_secret = app_secret
 
-		self.__sql_connection.cursor()
+		self.__create_stock_info_table()
+		self.__create_last_ws_query_table()
+		self.__load_last_ws_query_table()
 
 	def __del__(self):
 		if self.__ws_app != None:
 			self.__ws_app.close()
 
-	def __remove_last_token(self):
+
+	def __create_stock_info_table(self):
+		try:
+			table_query_str = (
+				"CREATE TABLE IF NOT EXISTS coin_info ("
+				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "stock_name_kr VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_market VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_country VARCHAR(64) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_sector VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_industry VARCHAR(128) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_count BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
+				+ "stock_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+				+ "stock_capitalization DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+				+ "stock_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
+				+ "PRIMARY KEY (stock_code) USING BTREE,"
+				+ "UNIQUE INDEX stock_code (stock_code) USING BTREE,"
+				+ "INDEX stock_name_kr (stock_name_kr) USING BTREE,"
+				+ "INDEX stock_name_en (stock_name_en) USING BTREE"
+				+ ")COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
+			)
+
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(table_query_str)
+
+		except: raise Exception("Fail to create stock info table")
+
+	def __create_last_ws_query_table(self):
+		try:
+			create_table_query = (
+				"CREATE TABLE IF NOT EXISTS stock_last_ws_query ("
+				+ "stock_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "stock_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "stock_api_stock_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "PRIMARY KEY (stock_query) USING BTREE,"
+				+ "INDEX stock_code (stock_code) USING BTREE,"
+				+ "CONSTRAINT FK_stock_list_last_query_stock_info FOREIGN KEY (stock_code) REFERENCES stock_info (stock_code) ON UPDATE CASCADE ON DELETE CASCADE"
+				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
+				)
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(create_table_query)
+
+		except: raise Exception("Fail to create last websocket query table")
+
+	def __load_last_ws_query_table(self):
+		try:
+			select_query = "SELECT * FROM stock_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(select_query)
+
+			last_query_list = cursor.fetchall()
+			self.__ws_sub_list.clear()
+			for info in last_query_list:
+				self.__ws_sub_list[info[0]] = [info[1], info[2], info[3]]
+
+		except: raise Exception("Fail to load last websocket query table")
+
+
+	def __create_token(self):
 		try:
 			file = open("./doc/last_token_info.dat", 'r')
 			strs = file.read().split("\n")
 			file.close()
 
-
 			last_api_token_type = strs[0]
 			last_api_token_val = strs[1]
 			last_api_token_valid_datetime = DateTime.strptime(strs[2], "%Y-%m-%d %H:%M:%S")
 
+			remain_sec = (last_api_token_valid_datetime - DateTime.now()).seconds
+
+			# 토큰이 생긴지 3분도 안 되었다면 그냥 사용
+			if remain_sec > 86220:
+				self.__api_token_type = last_api_token_type
+				self.__api_token_val = last_api_token_val
+				self.__api_token_valid_datetime = last_api_token_valid_datetime
+				self.__api_header = {
+					"content-type" : "application/json; charset=utf-8",
+					"authorization" : self.__api_token_type + " " + self.__api_token_val,
+					"appkey" : self.__app_key,
+					"appsecret" : self.__app_secret,
+					"custtype" : "P"
+				}
+				return
+
 			# 마지막 토큰이 생성된지 대략 12시간도 안 되었다면 토큰 패기 요청 보냄
 			# 안 그러면 같은 유효기간의 토큰이 생성됨
-			if (last_api_token_valid_datetime - DateTime.now()).seconds < 43200:
+			if remain_sec < 43200:
 				api_url = "/oauth2/revokeP"
 				api_body = {
 					"grant_type" : "client_credentials",
@@ -80,8 +158,7 @@ class ApiKoreaInvestType:
 			os.remove("./doc/last_token_info.dat")
 
 		except: pass
-	
-	def __create_token(self):
+
 		try:
 			api_url = "/oauth2/tokenP"
 			api_body = {
@@ -160,6 +237,27 @@ class ApiKoreaInvestType:
 
 	##########################################################################
  
+
+	def __update_last_ws_query_table(self):
+		try:
+			delete_list_query = "DELETE FROM stock_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(delete_list_query)
+			
+			if len(self.__ws_sub_list) == 0: return
+
+			varified_list = {}
+			for key, val in self.__ws_sub_list.items():
+				try:
+					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
+					cursor.execute(insert_list_query)
+					varified_list[key] = val
+				except:
+					continue
+
+			self.__ws_sub_list = varified_list
+
+		except: raise Exception("Fail to update last websocket query table")
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float):
 		table_name = (
@@ -471,7 +569,7 @@ class ApiKoreaInvestType:
 	def __on_ws_open(self, ws:websocket.WebSocketApp):
 		self.__ws_is_opened = True
 		for key, val in self.__ws_sub_list.items():
-			self.__on_ws_send_message(val[0], val[1])
+			self.__on_ws_send_message(val[1], val[2])
 			time.sleep(0.5)
 
 		Util.PrintNormalLog("Opened korea invest websocket")
@@ -572,7 +670,7 @@ class ApiKoreaInvestType:
 				api_code = "H0STCNT0"
 				api_stock_code = stock_code
 
-			self.__ws_sub_list["EX_" + stock_code] = [api_code, api_stock_code]
+			self.__ws_sub_list["EX_" + stock_code] = [stock_code, api_code, api_stock_code]
 
 			return 1
 		
@@ -606,7 +704,7 @@ class ApiKoreaInvestType:
 				api_code = "H0STASP0"
 				api_stock_code = stock_code
 
-			self.__ws_sub_list["OB_" + stock_code] = [api_code, api_stock_code]
+			self.__ws_sub_list["OB_" + stock_code] = [stock_code, api_code, api_stock_code]
 
 			return 1
 		
@@ -619,7 +717,7 @@ class ApiKoreaInvestType:
 
 	def StartCollecting(self):
 		try:
-			self.__remove_last_token()
+			self.__update_last_ws_query_table()
 			self.__create_token()
 			self.__create_approval_key()
 			self.__create_websocket_app()

@@ -22,6 +22,7 @@ class ApiBithumbType:
 
 	__ws_sub_list = {}
 
+
 	##########################################################################
 
 
@@ -36,14 +37,17 @@ class ApiBithumbType:
 			autocommit=True
 		)
 
-		self.__create_coin_list_table()
-		self.__update_coin_list_table()
+		self.__create_coin_info_table()
+		self.__update_coin_info_table()
+		self.__create_last_ws_query_table()
+		self.__load_last_ws_query_table()
 
 	def __del__(self):
 		if self.__ws_app != None:
 			self.__ws_app.close()
 
-	def __create_coin_list_table(self):
+
+	def __create_coin_info_table(self):
 		try:
 			table_query_str = (
 				"CREATE TABLE IF NOT EXISTS coin_info ("
@@ -64,9 +68,9 @@ class ApiBithumbType:
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(table_query_str)
 
-		except: raise Exception("Fail to create coin list table")
+		except: raise Exception("Fail to create coin info table")
 
-	def __update_coin_list_table(self):
+	def __update_coin_info_table(self):
 		try:
 			# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
 			upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
@@ -115,7 +119,40 @@ class ApiBithumbType:
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(coin_query_str)
 
-		except: raise Exception("Fail to update coin list table")
+		except: raise Exception("Fail to update coin info table")
+
+	def __create_last_ws_query_table(self):
+		try:
+			create_table_query = (
+				"CREATE TABLE IF NOT EXISTS coin_last_ws_query ("
+				+ "coin_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "coin_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "coin_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "coin_api_coin_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "PRIMARY KEY (coin_query) USING BTREE,"
+				+ "INDEX coin_code (coin_code) USING BTREE,"
+				+ "CONSTRAINT FK_coin_list_last_query_coin_info FOREIGN KEY (coin_code) REFERENCES coin_info (coin_code) ON UPDATE CASCADE ON DELETE CASCADE"
+				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
+				)
+			
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(create_table_query)
+
+		except: raise Exception("Fail to create last websocket query table")
+
+	def __load_last_ws_query_table(self):
+		try:
+			select_query = "SELECT * FROM coin_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(select_query)
+
+			last_query_list = cursor.fetchall()
+			self.__ws_sub_list.clear()
+			for info in last_query_list:
+				self.__ws_sub_list[info[0]] = [info[1], info[2], info[3]]
+
+		except: raise Exception("Fail to load last websocket query table")
+
 
 	def __create_websocket_app(self):
 		try:
@@ -135,6 +172,27 @@ class ApiBithumbType:
 
 	##########################################################################
  
+ 
+	def __update_last_ws_query_table(self):
+		try:
+			delete_list_query = "DELETE FROM coin_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(delete_list_query)
+			
+			if len(self.__ws_sub_list) == 0: return
+
+			varified_list = {}
+			for key, val in self.__ws_sub_list.items():
+				try:
+					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
+					cursor.execute(insert_list_query)
+					varified_list[key] = val
+				except:
+					continue
+
+			self.__ws_sub_list = varified_list
+
+		except: raise Exception("Fail to update last websocket query table")
 
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float):
 		table_name = (
@@ -330,10 +388,10 @@ class ApiBithumbType:
 
 		buf_dict = {}
 		for key, val in self.__ws_sub_list.items():
-			if val[0] in buf_dict:
-				buf_dict[val[0]].append(val[1])
+			if val[1] in buf_dict:
+				buf_dict[val[1]].append(val[2])
 			else:
-				buf_dict[val[0]] = [val[1]]
+				buf_dict[val[1]] = [val[2]]
 
 		for key, val in buf_dict.items():
 			self.__on_ws_send_message(key, val)
@@ -344,6 +402,7 @@ class ApiBithumbType:
 	def __on_ws_close(self, ws:websocket.WebSocketApp):
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed bithumb websocket")
+
 
 	##########################################################################
 	
@@ -405,7 +464,7 @@ class ApiBithumbType:
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_sub_list["EX_" + coin_code] = ["transaction", api_stock_code]
+			self.__ws_sub_list["EX_" + coin_code] = [coin_code, "transaction", api_stock_code]
 
 			return 1
 		
@@ -430,7 +489,7 @@ class ApiBithumbType:
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_sub_list["OB_" + coin_code] = ["orderbooksnapshot", api_stock_code]
+			self.__ws_sub_list["OB_" + coin_code] = [coin_code, "orderbooksnapshot", api_stock_code]
 
 			return 1
 		
@@ -443,7 +502,8 @@ class ApiBithumbType:
 
 	def StartCollecting(self):
 		try:
-			self.__update_coin_list_table()
+			self.__update_coin_info_table()
+			self.__update_last_ws_query_table()
 			self.__create_websocket_app()
 			
 			return True

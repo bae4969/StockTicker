@@ -20,7 +20,8 @@ class ApiBithumbType:
 	__ws_thread:threading.Thread = None
 	__ws_is_opened = False
 
-	__ws_sub_list = {}
+	__ws_query_list_buf = {}
+	__ws_query_list_cur = {}
 
 
 	##########################################################################
@@ -47,7 +48,7 @@ class ApiBithumbType:
 			self.__ws_app.close()
 
 
-	def __create_coin_info_table(self):
+	def __create_coin_info_table(self) -> None:
 		try:
 			table_query_str = (
 				"CREATE TABLE IF NOT EXISTS coin_info ("
@@ -59,9 +60,8 @@ class ApiBithumbType:
 				+ "`coin_order` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,"
 				+ "PRIMARY KEY (coin_code) USING BTREE,"
 				+ "UNIQUE INDEX coin_code (coin_code) USING BTREE,"
-				+ "INDEX coin_name_kr (coin_name_kr) USING BTREE,"
-				+ "INDEX coin_name_en (coin_name_en) USING BTREE,"
-				+ "INDEX `coin_order` (`coin_order`) USING BTREE"
+				+ "INDEX coin_name (coin_name_kr, coin_name_en) USING BTREE,"
+				+ "INDEX coin_order (coin_order) USING BTREE"
 				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 			)
 
@@ -70,7 +70,7 @@ class ApiBithumbType:
 
 		except: raise Exception("Fail to create coin info table")
 
-	def __update_coin_info_table(self):
+	def __update_coin_info_table(self) -> None:
 		try:
 			# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
 			upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
@@ -121,7 +121,7 @@ class ApiBithumbType:
 
 		except: raise Exception("Fail to update coin info table")
 
-	def __create_last_ws_query_table(self):
+	def __create_last_ws_query_table(self) -> None:
 		try:
 			create_table_query = (
 				"CREATE TABLE IF NOT EXISTS coin_last_ws_query ("
@@ -140,21 +140,34 @@ class ApiBithumbType:
 
 		except: raise Exception("Fail to create last websocket query table")
 
-	def __load_last_ws_query_table(self):
+	def __load_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_sub_list.clear()
+			self.__ws_query_list_buf.clear()
 			for info in last_query_list:
-				self.__ws_sub_list[info[0]] = [info[1], info[2], info[3]]
+				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3]]
 
 		except: raise Exception("Fail to load last websocket query table")
 
 
-	def __create_websocket_app(self):
+	def __sync_last_ws_query_table(self) -> None:
+		try:
+			select_query = "SELECT * FROM coin_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(select_query)
+
+			last_query_list = cursor.fetchall()
+			self.__ws_query_list_cur.clear()
+			for info in last_query_list:
+				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3]]
+
+		except: raise Exception("Fail to load last websocket query table")
+
+	def __create_websocket_app(self) -> None:
 		try:
 			if self.__ws_app != None:
 				self.__ws_app.close()
@@ -172,33 +185,12 @@ class ApiBithumbType:
 
 	##########################################################################
  
- 
-	def __update_last_ws_query_table(self):
-		try:
-			delete_list_query = "DELETE FROM coin_last_ws_query"
-			cursor = self.__sql_connection.cursor()
-			cursor.execute(delete_list_query)
-			
-			if len(self.__ws_sub_list) == 0: return
 
-			varified_list = {}
-			for key, val in self.__ws_sub_list.items():
-				try:
-					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
-					cursor.execute(insert_list_query)
-					varified_list[key] = val
-				except:
-					continue
-
-			self.__ws_sub_list = varified_list
-
-		except: raise Exception("Fail to update last websocket query table")
-
-	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float):
+	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
 			coin_code.replace("/", "_")
 			+ "_"
-			+ dt.replace(day=dt.day // 8).strftime("%Y%m%d")
+			+ dt.strftime("%Y%V")
 		)
 
 		datetime_00_min = dt
@@ -276,12 +268,16 @@ class ApiBithumbType:
 		cursor.execute(insert_raw_table_query_str)
 		cursor.execute(insert_candle_table_query_str)
 
-	def __update_coin_orderbook_table(self, coin_code:str, dt:DateTime, data):
+	def __update_coin_orderbook_table(self, coin_code:str, dt:DateTime, data) -> None:
 		# TODO
 		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
 		return
-
-		table_name = coin_code.replace("/", "_")
+	
+		table_name = (
+			coin_code.replace("/", "_")
+			+ "_"
+			+ dt.strftime("%Y%V")
+		)
 		orderbook_table_query_str = (
 			"CREATE TABLE IF NOT EXISTS coin_orderbook_" + table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
@@ -308,7 +304,7 @@ class ApiBithumbType:
 	##########################################################################
   
 
-	def __on_recv_coin_execution(self, msg_json:json):
+	def __on_recv_coin_execution(self, msg_json:json) -> None:
 		for data in msg_json["content"]["list"]:
 			from_to = data["symbol"].split("_")
 			dt_str = data["contDtm"].split(".")
@@ -325,7 +321,7 @@ class ApiBithumbType:
 			else:
 				self.__update_coin_execution_table(coin_code, dt, price, volume, 0, 0)
 
-	def __on_recv_coin_orderbook(self, msg_json:json):
+	def __on_recv_coin_orderbook(self, msg_json:json) -> None:
 		print(json.dumps(msg_json["content"]))
 		# {
 		# 	"type": "orderbooksnapshot",
@@ -356,7 +352,7 @@ class ApiBithumbType:
 		# }
 	
 
-	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str):
+	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str) -> None:
 		try:
 			msg_json = json.loads(msg)
 
@@ -371,9 +367,9 @@ class ApiBithumbType:
 				elif msg_json["type"] == "orderbooksnapshot": self.__on_recv_coin_orderbook(msg_json)
 
 		except Exception as e:
-			Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
+			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
 
-	def __on_ws_send_message(self, api_code:str, coin_code_list:list):
+	def __on_ws_send_message(self, api_code:str, coin_code_list:list) -> None:
 		try:
 			msg = {
 				"type" : api_code,
@@ -383,11 +379,11 @@ class ApiBithumbType:
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
 			
-	def __on_ws_open(self, ws:websocket.WebSocketApp):
+	def __on_ws_open(self, ws:websocket.WebSocketApp) -> None:
 		self.__ws_is_opened = True
 
 		buf_dict = {}
-		for key, val in self.__ws_sub_list.items():
+		for key, val in self.__ws_query_list_cur.items():
 			if val[1] in buf_dict:
 				buf_dict[val[1]].append(val[2])
 			else:
@@ -399,7 +395,7 @@ class ApiBithumbType:
 
 		Util.PrintNormalLog("Opened bithumb websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp):
+	def __on_ws_close(self, ws:websocket.WebSocketApp) -> None:
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed bithumb websocket")
 
@@ -407,7 +403,7 @@ class ApiBithumbType:
 	##########################################################################
 	
 
-	def FindCoin(self, name:str):
+	def FindCoin(self, name:str) -> list:
 		try:
 			query_str = (
 				"SELECT coin_code, coin_name_kr, coin_name_en "
@@ -422,10 +418,10 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__)
+			Util.PrintErrorLog(e.__str__())
 			return []
 
-	def GetCoinList(self, cnt:int, offset:int = 0):
+	def GetCoinList(self, cnt:int, offset:int = 0) -> list:
 		try:
 			query_str = (
 				"SELECT coin_code, coin_name_kr, coin_name_en "
@@ -439,17 +435,59 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__)
+			Util.PrintErrorLog(e.__str__())
 			return []
 	
 
-	def ClearAllQuery(self):
-		self.__ws_sub_list.clear()
+	def ClearAllQuery(self) -> None:
+		self.__ws_query_list_buf.clear()
 
-	def AddCoinExecutionQuery(self, coin_code:str):
+	def GetInsertedQueryList(self) -> list:
 		try:
-			if self.__ws_sub_list.__contains__("EX_" + coin_code):
-				return 0
+			ret = []
+			for key, val in self.__ws_query_list_buf.items():
+				query_str = (
+					"SELECT coin_code, coin_name_kr, coin_name_en "
+					+ "FROM coin_info WHERE "
+					+ "coin_code='" + val[0] + "'"
+				)
+				cursor = self.__sql_connection.cursor()
+				cursor.execute(query_str)
+				ret.append(cursor.fetchall()[0])
+
+			return ret
+
+		except Exception as e:
+			Util.PrintErrorLog(e.__str__())
+			return []
+
+	def UpdateAllQuery(self) -> bool:
+		try:
+			delete_list_query = "DELETE FROM coin_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(delete_list_query)
+
+			varified_list = {}
+			for key, val in self.__ws_query_list_buf.items():
+				try:
+					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
+					cursor.execute(insert_list_query)
+					varified_list[key] = val
+				except:
+					continue
+
+			self.__ws_query_list_buf = varified_list
+
+			return True
+
+		except:
+			return False
+
+
+	def AddCoinExecutionQuery(self, coin_code:str) -> int:
+		try:
+			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
+				return len(self.__ws_query_list_buf)
 			
 			query_str = (
 				"SELECT COUNT(*) "
@@ -459,22 +497,21 @@ class ApiBithumbType:
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 			sql_ret = cursor.fetchall()
-			if int(sql_ret[0][0]) == 0:
-				return -1
+			if int(sql_ret[0][0]) == 0: return -500
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_sub_list["EX_" + coin_code] = [coin_code, "transaction", api_stock_code]
+			self.__ws_query_list_buf["EX_" + coin_code] = [coin_code, "transaction", api_stock_code]
 
-			return 1
+			return len(self.__ws_query_list_buf)
 		
 		except:
-			return -2
+			return -400
 
-	def AddCoinOrderbookQuery(self, coin_code:str):
+	def AddCoinOrderbookQuery(self, coin_code:str) -> int:
 		try:
-			if self.__ws_sub_list.__contains__("EX_" + coin_code):
-				return 0
+			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
+				return len(self.__ws_query_list_buf)
 			
 			query_str = (
 				"SELECT COUNT(*) "
@@ -484,38 +521,37 @@ class ApiBithumbType:
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 			sql_ret = cursor.fetchall()
-			if int(sql_ret[0][0]) == 0:
-				return -1
+			if int(sql_ret[0][0]) == 0: return -501
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_sub_list["OB_" + coin_code] = [coin_code, "orderbooksnapshot", api_stock_code]
+			self.__ws_query_list_buf["OB_" + coin_code] = [coin_code, "orderbooksnapshot", api_stock_code]
 
-			return 1
+			return len(self.__ws_query_list_buf)
 		
 		except:
-			return -2
+			return -400
 
-	def DelStockExecutionQuery(self, coin_code:str):
+	def DelStockExecutionQuery(self, coin_code:str) -> None:
 		try:
-			del self.__ws_sub_list["EX_" + coin_code]
+			del self.__ws_query_list_buf["EX_" + coin_code]
 		except:
 			pass
 
-	def DelStockOrderbookQuery(self, coin_code:str):
+	def DelStockOrderbookQuery(self, coin_code:str) -> None:
 		try:
-			del self.__ws_sub_list["OB_" + coin_code]
+			del self.__ws_query_list_buf["OB_" + coin_code]
 		except:
 			pass
 
 
-	def IsCollecting(self):
+
+	def IsCollecting(self) -> bool:
 		return self.__ws_is_opened
 
-	def StartCollecting(self):
+	def StartCollecting(self) -> bool:
 		try:
-			self.__update_coin_info_table()
-			self.__update_last_ws_query_table()
+			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
 			
 			return True
@@ -524,7 +560,7 @@ class ApiBithumbType:
 			Util.PrintErrorLog(e.__str__())
 			return False
 
-	def StopCollecting(self):
+	def StopCollecting(self) -> None:
 		if self.__ws_app != None:
 			self.__ws_app.close()
 	

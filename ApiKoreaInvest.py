@@ -9,6 +9,25 @@ import time
 from datetime import datetime as DateTime
 from datetime import timedelta
 
+
+def GetKrQueryCount(query_list:dict) -> int:
+	cnt = 0
+	for key, val in query_list.items():
+		if (val[1].find("KOSPI") != -1 or
+			val[1].find("KOSDAQ") != -1 or
+			val[1].find("KONEX") != -1):
+			cnt += 1
+
+	return cnt
+def GetUsQueryCount(query_list:dict) -> int:
+	cnt = 0
+	for key, val in query_list.items():
+		if (val[1].find("NYSE") != -1 or
+			val[1].find("NASDAQ") != -1):
+			cnt += 1
+
+	return cnt
+
 class ApiKoreaInvestType:
 	__sql_connection:pymysql.Connection = None
 	__app_key:str = ""
@@ -26,7 +45,9 @@ class ApiKoreaInvestType:
 	__ws_thread:threading.Thread = None
 	__ws_is_opened:bool = False
 
-	__ws_sub_list:dict = {}
+	__ws_query_type:str = "KR"
+	__ws_query_list_buf:dict = {}
+	__ws_query_list_cur:dict = {}
 	__ws_ex_excution_last_volume:dict = {}
 
 
@@ -55,10 +76,10 @@ class ApiKoreaInvestType:
 			self.__ws_app.close()
 
 
-	def __create_stock_info_table(self):
+	def __create_stock_info_table(self) -> None:
 		try:
 			table_query_str = (
-				"CREATE TABLE IF NOT EXISTS coin_info ("
+				"CREATE TABLE IF NOT EXISTS stock_info ("
 				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_name_kr VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
@@ -72,8 +93,7 @@ class ApiKoreaInvestType:
 				+ "stock_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
 				+ "PRIMARY KEY (stock_code) USING BTREE,"
 				+ "UNIQUE INDEX stock_code (stock_code) USING BTREE,"
-				+ "INDEX stock_name_kr (stock_name_kr) USING BTREE,"
-				+ "INDEX stock_name_en (stock_name_en) USING BTREE"
+				+ "INDEX stock_name (stock_name_kr, stock_name_en) USING BTREE"
 				+ ")COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 			)
 
@@ -82,12 +102,13 @@ class ApiKoreaInvestType:
 
 		except: raise Exception("Fail to create stock info table")
 
-	def __create_last_ws_query_table(self):
+	def __create_last_ws_query_table(self) -> None:
 		try:
 			create_table_query = (
 				"CREATE TABLE IF NOT EXISTS stock_last_ws_query ("
 				+ "stock_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "stock_market VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_stock_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "PRIMARY KEY (stock_query) USING BTREE,"
@@ -100,21 +121,34 @@ class ApiKoreaInvestType:
 
 		except: raise Exception("Fail to create last websocket query table")
 
-	def __load_last_ws_query_table(self):
+	def __load_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM stock_last_ws_query"
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_sub_list.clear()
+			self.__ws_query_list_buf.clear()
 			for info in last_query_list:
-				self.__ws_sub_list[info[0]] = [info[1], info[2], info[3]]
+				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3], info[4]]
+
+		except: raise Exception("Fail to load last websocket query table")
+		
+
+	def __sync_last_ws_query_table(self) -> None:
+		try:
+			select_query = "SELECT * FROM stock_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(select_query)
+
+			last_query_list = cursor.fetchall()
+			self.__ws_query_list_cur.clear()
+			for info in last_query_list:
+				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3], info[4]]
 
 		except: raise Exception("Fail to load last websocket query table")
 
-
-	def __create_token(self):
+	def __create_token(self) -> None:
 		try:
 			file = open("./doc/last_token_info.dat", 'r')
 			strs = file.read().split("\n")
@@ -154,8 +188,7 @@ class ApiKoreaInvestType:
 					url = self.__API_BASE_URL + api_url,
 					data = json.dumps(api_body),
 				)
-
-			os.remove("./doc/last_token_info.dat")
+				os.remove("./doc/last_token_info.dat")
 
 		except: pass
 
@@ -196,7 +229,7 @@ class ApiKoreaInvestType:
 
 		except: raise Exception("Fail to create access token for KoreaInvest Api")
 
-	def __create_approval_key(self):
+	def __create_approval_key(self) -> None:
 		try:
 			api_url = "/oauth2/Approval"
 			api_header = {
@@ -219,7 +252,7 @@ class ApiKoreaInvestType:
 			
 		except: raise Exception("Fail to create web socket approval key")
  
-	def __create_websocket_app(self):
+	def __create_websocket_app(self) -> None:
 		try:
 			if self.__ws_app != None:
 				self.__ws_app.close()
@@ -238,32 +271,11 @@ class ApiKoreaInvestType:
 	##########################################################################
  
 
-	def __update_last_ws_query_table(self):
-		try:
-			delete_list_query = "DELETE FROM stock_last_ws_query"
-			cursor = self.__sql_connection.cursor()
-			cursor.execute(delete_list_query)
-			
-			if len(self.__ws_sub_list) == 0: return
-
-			varified_list = {}
-			for key, val in self.__ws_sub_list.items():
-				try:
-					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
-					cursor.execute(insert_list_query)
-					varified_list[key] = val
-				except:
-					continue
-
-			self.__ws_sub_list = varified_list
-
-		except: raise Exception("Fail to update last websocket query table")
-
-	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float):
+	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
 			stock_code.replace("/", "_")
 			+ "_"
-			+ dt.replace(day=dt.day // 8).strftime("%Y%m%d")
+			+ dt.strftime("%Y%V")
 		)
 
 		datetime_00_min = dt
@@ -341,7 +353,7 @@ class ApiKoreaInvestType:
 		cursor.execute(insert_raw_table_query_str)
 		cursor.execute(insert_candle_table_query_str)
 
-	def __update_stock_orderbook_table(self, stock_code:str, dt:DateTime, data):
+	def __update_stock_orderbook_table(self, stock_code:str, dt:DateTime, data) -> None:
 		# TODO
 		#무엇을 저장할지, 어떤 방식으로 저장할지 안 정해짐
 		return
@@ -349,7 +361,7 @@ class ApiKoreaInvestType:
 		table_name = (
 			stock_code.replace("/", "_")
 			+ "_"
-			+ dt.replace(day=dt.day // 8).strftime("%Y%m%d")
+			+ dt.strftime("%Y%V")
 		)
 
 		create_orderbook_table_query_str = (
@@ -374,7 +386,7 @@ class ApiKoreaInvestType:
 	##########################################################################
   
 
-	def __on_recv_kr_stock_execution(self, data_cnt:int, data:str):
+	def __on_recv_kr_stock_execution(self, data_cnt:int, data:str) -> None:
 		try:
 			# "유가증권단축종목코드|주식체결시간|주식현재가|전일대비부호|전일대비|전일대비율|가중평균주식가격|주식시가|주식최고가|주식최저가|매도호가1|매수호가1|체결거래량|누적거래량|누적거래대금|매도체결건수|매수체결건수|순매수체결건수|체결강도|총매도수량|총매수수량|체결구분|매수비율|전일거래량대비등락율|시가시간|시가대비구분|시가대비|최고가시간|고가대비구분|고가대비|최저가시간|저가대비구분|저가대비|영업일자|신장운영구분코드|거래정지여부|매도호가잔량|매수호가잔량|총매도호가잔량|총매수호가잔량|거래량회전율|전일동시간누적거래량|전일동시간누적거래량비율|시간구분코드|임의종료구분코드|정적VI발동기준가"
 			pValue = data.split('^')
@@ -398,14 +410,14 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			raise Exception("kr stock execution %s [%s]"%(stock_code, e.__str__()))
 
-	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str):
+	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str) -> None:
 		try:
     	# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
 			pValue = data.split('^')
 			for data_idx in range(data_cnt):
 				data_offset = 26 * data_idx
 
-				stock_execution_dt_str = pValue[data_offset + 6] + pValue[data_offset + 7]
+				stock_execution_dt_str = pValue[data_offset + 4] + pValue[data_offset + 5]
 
 				stock_code = pValue[data_offset + 1]
 				dt = DateTime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
@@ -439,7 +451,7 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			raise Exception("kr stock execution %s [%s]"%(stock_code, e.__str__()))
 
-	def __on_recv_kr_stock_orderbook(self, data:str):
+	def __on_recv_kr_stock_orderbook(self, data:str) -> None:
 		return
 		""" 넘겨받는데이터가 정상인지 확인
 		print("stockhoka[%s]"%(data))
@@ -488,7 +500,7 @@ class ApiKoreaInvestType:
 		print("누적거래량             [%s]" % (recvvalue[53]))
 		print("주식매매 구분코드      [%s]" % (recvvalue[58]))
 		
-	def __on_recv_ex_stock_orderbook(self, data:str):
+	def __on_recv_ex_stock_orderbook(self, data:str) -> None:
 		return
 		""" 넘겨받는데이터가 정상인지 확인
 		print("stockhoka[%s]"%(data))
@@ -512,7 +524,7 @@ class ApiKoreaInvestType:
 		print("매도잔량대비        [%s]" % (recvvalue[16]))
 
 
-	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str):
+	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str) -> None:
 		try:
 			if msg[0] == '0':
 				# 수신데이터가 실데이터 이전은 '|'로 나눠 있음
@@ -546,7 +558,7 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
-	def __on_ws_send_message(self, api_code:str, stock_code:str):
+	def __on_ws_send_message(self, api_code:str, stock_code:str) -> None:
 		try:
 			msg = {
 				"header" : {
@@ -566,15 +578,25 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
 
-	def __on_ws_open(self, ws:websocket.WebSocketApp):
+	def __on_ws_open(self, ws:websocket.WebSocketApp) -> None:
 		self.__ws_is_opened = True
-		for key, val in self.__ws_sub_list.items():
-			self.__on_ws_send_message(val[1], val[2])
+		for key, val in self.__ws_query_list_cur.items():
+			if (self.__ws_query_type == "KR" and 
+				val[1].find("KOSPI") == -1 and
+				val[1].find("KOSDAQ") == -1 and
+				val[1].find("KONEX") == -1
+				) or (
+				self.__ws_query_type == "EX" and 
+				val[1].find("NYSE") == -1 and
+				val[1].find("NASDAQ") == -1
+				): continue
+			
+			self.__on_ws_send_message(val[2], val[3])
 			time.sleep(0.5)
 
 		Util.PrintNormalLog("Opened korea invest websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp):
+	def __on_ws_close(self, ws:websocket.WebSocketApp) -> None:
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed korea invest websocket")
 
@@ -582,7 +604,7 @@ class ApiKoreaInvestType:
 	##########################################################################
 	
 
-	def FindStock(self, name:str):
+	def FindStock(self, name:str) -> list:
 		try:
 			query_str = (
 				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
@@ -597,10 +619,53 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__)
+			Util.PrintErrorLog(e.__str__())
 			return []
 
-	def GetKrStockList(self, cnt:int, offset:int = 0):
+	def FindKrStock(self, name:str) -> list:
+			try:
+				query_str = (
+					"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
+					+ "FROM stock_info WHERE ("
+					+ "stock_market LIKE 'KOSPI%' or "
+					+ "stock_market LIKE 'KOSDAQ%' or "
+					+ "stock_market LIKE 'KONEX%') "
+					+ "AND ("
+					+ "stock_name_kr LIKE '%" + name + "%' or "
+					+ "stock_name_en LIKE '%" + name + "%')"
+					+ "ORDER BY stock_capitalization DESC"
+				)
+				cursor = self.__sql_connection.cursor()
+				cursor.execute(query_str)
+
+				return cursor.fetchall()
+			
+			except Exception as e:
+				Util.PrintErrorLog(e.__str__())
+				return []
+
+	def FindUsStock(self, name:str) -> list:
+			try:
+				query_str = (
+					"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
+					+ "FROM stock_info WHERE ("
+					+ "stock_market LIKE 'NYSE%' or "
+					+ "stock_market LIKE 'NASDAQ%') "
+					+ "AND ("
+					+ "stock_name_kr LIKE '%" + name + "%' or "
+					+ "stock_name_en LIKE '%" + name + "%')"
+					+ "ORDER BY stock_capitalization DESC"
+				)
+				cursor = self.__sql_connection.cursor()
+				cursor.execute(query_str)
+
+				return cursor.fetchall()
+			
+			except Exception as e:
+				Util.PrintErrorLog(e.__str__())
+				return []
+
+	def GetKrStockList(self, cnt:int, offset:int = 0) -> list:
 		try:
 			query_str = (
 				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
@@ -617,10 +682,10 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__)
+			Util.PrintErrorLog(e.__str__())
 			return []
 	
-	def GetUsStockList(self, cnt:int, offset:int = 0):
+	def GetUsStockList(self, cnt:int, offset:int = 0) -> list:
 		try:
 			query_str = (
 				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
@@ -636,100 +701,200 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__)
+			Util.PrintErrorLog(e.__str__())
 			return []
 
 
-	def ClearAllQuery(self):
-		self.__ws_sub_list.clear()
+	def ClearAllQuery(self) -> None:
+		self.__ws_query_list_buf.clear()
 
-	def AddStockExecutionQuery(self, stock_code:str):
+	def GetInsertedKrQueryList(self) -> list:
 		try:
-			if self.__ws_sub_list.__contains__("EX_" + stock_code):
-				return 0
+			ret = []
+			for key, val in self.__ws_query_list_buf.items():
+				if (val[1].find("KOSPI") == -1 and
+					val[1].find("KOSDAQ") == -1 and
+					val[1].find("KONEX") == -1):
+					continue
+
+				query_str = (
+					"SELECT stock_code, stock_name_kr, stock_name_en "
+					+ "FROM stock_info WHERE "
+					+ "stock_code='" + val[0] + "'"
+				)
+				cursor = self.__sql_connection.cursor()
+				cursor.execute(query_str)
+				ret.append(cursor.fetchall()[0])
+
+			return ret
+
+		except Exception as e:
+			Util.PrintErrorLog(e.__str__())
+			return []
+		
+	def GetInsertedUsQueryList(self) -> list:
+		try:
+			ret = []
+			for key, val in self.__ws_query_list_buf.items():
+				if (val[1].find("NYSE") == -1 and
+					val[1].find("NASDAQ") == -1):
+					continue
+
+				query_str = (
+					"SELECT stock_code, stock_name_kr, stock_name_en "
+					+ "FROM stock_info WHERE "
+					+ "stock_code='" + val[0] + "'"
+				)
+				cursor = self.__sql_connection.cursor()
+				cursor.execute(query_str)
+				ret.append(cursor.fetchall()[0])
+
+			return ret
+
+		except Exception as e:
+			Util.PrintErrorLog(e.__str__())
+			return []
+		
+	def UpdateAllQuery(self) -> bool:
+		try:
+			delete_list_query = "DELETE FROM stock_last_ws_query"
+			cursor = self.__sql_connection.cursor()
+			cursor.execute(delete_list_query)
 			
-			query_str = (
+			varified_list = {}
+			for key, val in self.__ws_query_list_buf.items():
+				try:
+					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s','%s')"%(key, val[0], val[1], val[2], val[3])
+					cursor.execute(insert_list_query)
+					varified_list[key] = val
+				except:
+					continue
+
+			self.__ws_query_list_buf = varified_list
+
+			return True
+
+		except:
+			return False
+
+
+	def AddStockExecutionQuery(self, stock_code:str) -> int:
+		try:
+			stock_code = stock_code.upper()
+			if self.__ws_query_list_buf.__contains__("EX_" + stock_code):
+				stock_market = self.__ws_query_list_buf["EX_" + stock_code][1]
+				if (stock_market == "NYSE" or
+					stock_market == "NASDAQ"):
+					return GetUsQueryCount(self.__ws_query_list_buf)
+				else:
+					return GetKrQueryCount(self.__ws_query_list_buf)
+
+			exist_query_str = (
 				"SELECT stock_market "
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
 			cursor = self.__sql_connection.cursor()
-			cursor.execute(query_str)
-			sql_ret = cursor.fetchall()
-			if len(sql_ret) == 0:
-				return -1
+			cursor.execute(exist_query_str)
+			exist_ret = cursor.fetchall()
+			if len(exist_ret) == 0: return -500
 			
-			stock_market = sql_ret[0][0]
+			stock_market = exist_ret[0][0]
 			if stock_market == "NYSE":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "HDFSCNT0"
 				api_stock_code = "DNYS" + stock_code
 			elif stock_market == "NASDAQ":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "HDFSCNT0"
 				api_stock_code = "DNAS" + stock_code
 			else:
+				if GetKrQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "H0STCNT0"
 				api_stock_code = stock_code
 
-			self.__ws_sub_list["EX_" + stock_code] = [stock_code, api_code, api_stock_code]
+			self.__ws_query_list_buf["EX_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
 
-			return 1
+			if (stock_market == "NYSE" or
+				stock_market == "NASDAQ"):
+				return GetUsQueryCount(self.__ws_query_list_buf)
+			else:
+				return GetKrQueryCount(self.__ws_query_list_buf)
 		
 		except:
-			return -2
+			return -400
 
-	def AddStockOrderbookQuery(self, stock_code:str):
+	def AddStockOrderbookQuery(self, stock_code:str) -> int:
 		try:
-			if self.__ws_sub_list.__contains__("OB_" + stock_code):
-				return 0
+			stock_code = stock_code.upper()
+			if self.__ws_query_list_buf.__contains__("OB_" + stock_code):
+				stock_market = self.__ws_query_list_buf["OB_" + stock_code][1]
+				if (stock_market == "NYSE" or
+					stock_market == "NASDAQ"):
+					return GetUsQueryCount(self.__ws_query_list_buf)
+				else:
+					return GetKrQueryCount(self.__ws_query_list_buf)
 			
-			query_str = (
+			exist_query_str = (
 				"SELECT stock_market "
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
 			cursor = self.__sql_connection.cursor()
-			cursor.execute(query_str)
-			sql_ret = cursor.fetchall()
-			if len(sql_ret) == 0:
-				return -1
+			cursor.execute(exist_query_str)
+			exist_ret = cursor.fetchall()
+			if len(exist_ret) == 0: return -500
 
-			stock_market = sql_ret[0][0]
+			stock_market = exist_ret[0][0]
 			if stock_market == "NYSE":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "HDFSASP0"
 				api_stock_code = "DNYS" + stock_code
 			elif stock_market == "NASDAQ":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "HDFSASP0"
 				api_stock_code = "DNAS" + stock_code
 			else:
+				if GetKrQueryCount(self.__ws_query_list_buf) >= 40: return -501
 				api_code = "H0STASP0"
 				api_stock_code = stock_code
 
-			self.__ws_sub_list["OB_" + stock_code] = [stock_code, api_code, api_stock_code]
+			self.__ws_query_list_buf["OB_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
 
-			return 1
+			if (stock_market == "NYSE" or
+				stock_market == "NASDAQ"):
+				return GetUsQueryCount(self.__ws_query_list_buf)
+			else:
+				return GetKrQueryCount(self.__ws_query_list_buf)
 		
 		except:
-			return -2
+			return -400
 		
-	def DelStockExecutionQuery(self, stock_code:str):
+	def DelStockExecutionQuery(self, stock_code:str) -> None:
 		try:
-			del self.__ws_sub_list["EX_" + stock_code]
+			stock_code = stock_code.upper()
+			del self.__ws_query_list_buf["EX_" + stock_code]
 		except:
 			pass
 
-	def DelStockOrderbookQuery(self, stock_code:str):
+	def DelStockOrderbookQuery(self, stock_code:str) -> None:
 		try:
-			del self.__ws_sub_list["OB_" + stock_code]
+			stock_code = stock_code.upper()
+			del self.__ws_query_list_buf["OB_" + stock_code]
 		except:
 			pass
 
 
-	def IsCollecting(self):
+	def IsCollecting(self) -> bool:
 		return self.__ws_is_opened
 
-	def StartCollecting(self):
+	def GetCurrentCollectingType(self) -> str:
+		return self.__ws_query_type
+
+	def StartCollecting(self, query_type:str) -> bool:
 		try:
-			self.__update_last_ws_query_table()
+			self.__ws_query_type = query_type
+			self.__sync_last_ws_query_table()
 			self.__create_token()
 			self.__create_approval_key()
 			self.__create_websocket_app()
@@ -740,7 +905,7 @@ class ApiKoreaInvestType:
 			Util.PrintErrorLog(e.__str__())
 			return False
 
-	def StopCollecting(self):
+	def StopCollecting(self) -> None:
 		if self.__ws_app != None:
 			self.__ws_app.close()
 	

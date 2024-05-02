@@ -486,6 +486,7 @@ class ApiBithumbType:
 
 	def AddCoinExecutionQuery(self, coin_code:str) -> int:
 		try:
+			coin_code = coin_code.upper()
 			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
 				return len(self.__ws_query_list_buf)
 			

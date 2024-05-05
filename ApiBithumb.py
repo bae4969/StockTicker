@@ -57,7 +57,7 @@ class ApiBithumbType:
 				+ "coin_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "coin_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "coin_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-				+ "`coin_order` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,"
+				+ "coin_order INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,"
 				+ "PRIMARY KEY (coin_code) USING BTREE,"
 				+ "UNIQUE INDEX coin_code (coin_code) USING BTREE,"
 				+ "INDEX coin_name (coin_name_kr, coin_name_en) USING BTREE,"
@@ -226,7 +226,7 @@ class ApiBithumbType:
 			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "PRIMARY KEY (execution_datetime) USING BTREE"
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=MEMORY"
+			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 		)
 		insert_raw_table_query_str = (
 			"INSERT INTO coin_execution_raw_" + table_name + " VALUES ("

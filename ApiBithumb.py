@@ -147,7 +147,7 @@ class ApiBithumbType:
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_query_list_buf.clear()
+			self.__ws_query_list_buf = {}
 			for info in last_query_list:
 				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3]]
 
@@ -161,7 +161,7 @@ class ApiBithumbType:
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_query_list_cur.clear()
+			self.__ws_query_list_cur = {}
 			for info in last_query_list:
 				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3]]
 

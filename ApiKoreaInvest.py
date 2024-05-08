@@ -62,7 +62,7 @@ class ApiKoreaInvestType:
 			passwd = sql_pw,
 			db = sql_db,
 			charset = 'utf8',
-			autocommit=True
+			autocommit=True,
 		)
 		self.__app_key = app_key
 		self.__app_secret = app_secret
@@ -142,7 +142,7 @@ class ApiKoreaInvestType:
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_query_list_cur = {}
+			self.__ws_query_list_cur.clear()
 			for info in last_query_list:
 				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3], info[4]]
 
@@ -596,7 +596,7 @@ class ApiKoreaInvestType:
 
 		Util.PrintNormalLog("Opened korea invest websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp) -> None:
+	def __on_ws_close(self, ws:websocket.WebSocketApp, close_code, close_msg) -> None:
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed korea invest websocket")
 
@@ -908,6 +908,7 @@ class ApiKoreaInvestType:
 	def StopCollecting(self) -> None:
 		if self.__ws_app != None:
 			self.__ws_app.close()
+			self.__ws_thread.join()
 	
 
 

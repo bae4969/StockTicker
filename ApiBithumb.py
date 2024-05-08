@@ -161,7 +161,7 @@ class ApiBithumbType:
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
-			self.__ws_query_list_cur = {}
+			self.__ws_query_list_cur.clear()
 			for info in last_query_list:
 				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3]]
 
@@ -395,7 +395,7 @@ class ApiBithumbType:
 
 		Util.PrintNormalLog("Opened bithumb websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp) -> None:
+	def __on_ws_close(self, ws:websocket.WebSocketApp, close_code, close_msg) -> None:
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed bithumb websocket")
 
@@ -564,6 +564,7 @@ class ApiBithumbType:
 	def StopCollecting(self) -> None:
 		if self.__ws_app != None:
 			self.__ws_app.close()
+			self.__ws_thread.join()
 	
 
 

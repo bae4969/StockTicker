@@ -30,6 +30,8 @@ def GetUsQueryCount(query_list:dict) -> int:
 
 class ApiKoreaInvestType:
 	__sql_connection:pymysql.Connection = None
+	__sql_thread:threading.Thread = None
+	__sql_stop_flag:bool = True
 	__app_key:str = ""
 	__app_secret:str = ""
 
@@ -70,10 +72,11 @@ class ApiKoreaInvestType:
 		self.__create_stock_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
+		self.__start_sql_ping()
 
 	def __del__(self):
-		if self.__ws_app != None:
-			self.__ws_app.close()
+		self.StopCollecting()
+		self.__stop_sql_ping()
 
 
 	def __create_stock_info_table(self) -> None:
@@ -270,6 +273,25 @@ class ApiKoreaInvestType:
 
 	##########################################################################
  
+
+	def __execute_sql_ping(self):
+		while self.__sql_stop_flag == False:
+			try:
+				self.__sql_connection.ping(reconnect=True)
+			except:
+				Util.PrintNormalLog("Fail to send ping to sql server")
+
+			time.sleep(1.0)
+
+	def __start_sql_ping(self):
+		self.__sql_stop_flag = False
+		self.__sql_thread = threading.Thread(target=self.__execute_sql_ping)
+		self.__sql_thread.start()
+
+	def __stop_sql_ping(self):
+		self.__sql_stop_flag = True
+		self.__sql_thread.join()
+
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
@@ -545,7 +567,6 @@ class ApiKoreaInvestType:
 
 				if msg_json["header"]["tr_id"] == "PINGPONG":
 					ws.send(msg)
-					Util.PrintNormalLog("Executed PINGPONG msg")
 
 				else:
 					rt_cd = msg_json["body"]["rt_cd"]

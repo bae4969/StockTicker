@@ -12,6 +12,8 @@ from datetime import timedelta
 
 class ApiBithumbType:
 	__sql_connection:pymysql.Connection = None
+	__sql_thread:threading.Thread = None
+	__sql_stop_flag:bool = True
 
 	__API_BASE_URL:str = "https://api.bithumb.com/public"
 
@@ -38,14 +40,17 @@ class ApiBithumbType:
 			autocommit=True
 		)
 
+		self.__sql_connection.ping(reconnect=True)
+
 		self.__create_coin_info_table()
 		self.__update_coin_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
+		self.__start_sql_ping()
 
 	def __del__(self):
-		if self.__ws_app != None:
-			self.__ws_app.close()
+		self.StopCollecting()
+		self.__stop_sql_ping()
 
 
 	def __create_coin_info_table(self) -> None:
@@ -185,6 +190,25 @@ class ApiBithumbType:
 
 	##########################################################################
  
+
+	def __execute_sql_ping(self):
+		while self.__sql_stop_flag == False:
+			try:
+				self.__sql_connection.ping(reconnect=True)
+			except:
+				Util.PrintNormalLog("Fail to send ping to sql server")
+
+			time.sleep(1.0)
+
+	def __start_sql_ping(self):
+		self.__sql_stop_flag = False
+		self.__sql_thread = threading.Thread(target=self.__execute_sql_ping)
+		self.__sql_thread.start()
+
+	def __stop_sql_ping(self):
+		self.__sql_stop_flag = True
+		self.__sql_thread.join()
+
 
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (

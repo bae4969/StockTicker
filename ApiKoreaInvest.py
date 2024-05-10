@@ -30,8 +30,6 @@ def GetUsQueryCount(query_list:dict) -> int:
 
 class ApiKoreaInvestType:
 	__sql_connection:pymysql.Connection = None
-	__sql_thread:threading.Thread = None
-	__sql_stop_flag:bool = True
 	__app_key:str = ""
 	__app_secret:str = ""
 
@@ -72,11 +70,9 @@ class ApiKoreaInvestType:
 		self.__create_stock_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
-		self.__start_sql_ping()
 
 	def __del__(self):
 		self.StopCollecting()
-		self.__stop_sql_ping()
 
 
 	def __create_stock_info_table(self) -> None:
@@ -100,6 +96,7 @@ class ApiKoreaInvestType:
 				+ ")COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 			)
 
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(table_query_str)
 
@@ -119,6 +116,7 @@ class ApiKoreaInvestType:
 				+ "CONSTRAINT FK_stock_list_last_query_stock_info FOREIGN KEY (stock_code) REFERENCES stock_info (stock_code) ON UPDATE CASCADE ON DELETE CASCADE"
 				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 				)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(create_table_query)
 
@@ -127,6 +125,7 @@ class ApiKoreaInvestType:
 	def __load_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM stock_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
@@ -141,6 +140,7 @@ class ApiKoreaInvestType:
 	def __sync_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM stock_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
@@ -274,25 +274,6 @@ class ApiKoreaInvestType:
 	##########################################################################
  
 
-	def __execute_sql_ping(self):
-		while self.__sql_stop_flag == False:
-			try:
-				self.__sql_connection.ping(reconnect=True)
-			except:
-				Util.PrintNormalLog("Fail to send ping to sql server")
-
-			time.sleep(1.0)
-
-	def __start_sql_ping(self):
-		self.__sql_stop_flag = False
-		self.__sql_thread = threading.Thread(target=self.__execute_sql_ping)
-		self.__sql_thread.start()
-
-	def __stop_sql_ping(self):
-		self.__sql_stop_flag = True
-		self.__sql_thread.join()
-
-
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
 			stock_code.replace("/", "_")
@@ -369,6 +350,7 @@ class ApiKoreaInvestType:
 			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
 		)
 
+		self.__sql_connection.ping(reconnect=True)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(create_raw_table_query_str)
 		cursor.execute(create_candle_table_query_str)
@@ -400,6 +382,7 @@ class ApiKoreaInvestType:
 			+ ")"
 		)
 
+		self.__sql_connection.ping(reconnect=True)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(create_orderbook_table_query_str)
 		cursor.execute(insert_orderbook_table_query_str)
@@ -409,10 +392,10 @@ class ApiKoreaInvestType:
   
 
 	def __on_recv_kr_stock_execution(self, data_cnt:int, data:str) -> None:
-		try:
-			# "유가증권단축종목코드|주식체결시간|주식현재가|전일대비부호|전일대비|전일대비율|가중평균주식가격|주식시가|주식최고가|주식최저가|매도호가1|매수호가1|체결거래량|누적거래량|누적거래대금|매도체결건수|매수체결건수|순매수체결건수|체결강도|총매도수량|총매수수량|체결구분|매수비율|전일거래량대비등락율|시가시간|시가대비구분|시가대비|최고가시간|고가대비구분|고가대비|최저가시간|저가대비구분|저가대비|영업일자|신장운영구분코드|거래정지여부|매도호가잔량|매수호가잔량|총매도호가잔량|총매수호가잔량|거래량회전율|전일동시간누적거래량|전일동시간누적거래량비율|시간구분코드|임의종료구분코드|정적VI발동기준가"
-			pValue = data.split('^')
-			for data_idx in range(data_cnt):
+		# "유가증권단축종목코드|주식체결시간|주식현재가|전일대비부호|전일대비|전일대비율|가중평균주식가격|주식시가|주식최고가|주식최저가|매도호가1|매수호가1|체결거래량|누적거래량|누적거래대금|매도체결건수|매수체결건수|순매수체결건수|체결강도|총매도수량|총매수수량|체결구분|매수비율|전일거래량대비등락율|시가시간|시가대비구분|시가대비|최고가시간|고가대비구분|고가대비|최저가시간|저가대비구분|저가대비|영업일자|신장운영구분코드|거래정지여부|매도호가잔량|매수호가잔량|총매도호가잔량|총매수호가잔량|거래량회전율|전일동시간누적거래량|전일동시간누적거래량비율|시간구분코드|임의종료구분코드|정적VI발동기준가"
+		pValue = data.split('^')
+		for data_idx in range(data_cnt):
+			try:
 				data_offset = 46 * data_idx
 
 				stock_execution_dt_str = DateTime.now().strftime("%Y%m%d") + pValue[data_offset + 1]
@@ -429,14 +412,14 @@ class ApiKoreaInvestType:
 				else:
 					self.__update_stock_execution_table(stock_code, dt, price, volume, 0, 0)
 					
-		except Exception as e:
-			raise Exception("kr stock execution %s [%s]"%(stock_code, e.__str__()))
+			except Exception as e:
+				raise Exception("[ kr stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
 	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str) -> None:
-		try:
     	# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
-			pValue = data.split('^')
-			for data_idx in range(data_cnt):
+		pValue = data.split('^')
+		for data_idx in range(data_cnt):
+			try:
 				data_offset = 26 * data_idx
 
 				stock_execution_dt_str = pValue[data_offset + 4] + pValue[data_offset + 5]
@@ -470,8 +453,8 @@ class ApiKoreaInvestType:
 				else:
 					self.__update_stock_execution_table(stock_code, dt, price, tot_volume, 0.0, 0.0)
 
-		except Exception as e:
-			raise Exception("kr stock execution %s [%s]"%(stock_code, e.__str__()))
+			except Exception as e:
+				raise Exception("[ ex stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
 	def __on_recv_kr_stock_orderbook(self, data:str) -> None:
 		return
@@ -572,9 +555,9 @@ class ApiKoreaInvestType:
 					rt_cd = msg_json["body"]["rt_cd"]
 
 					if rt_cd == '0':
-						Util.PrintNormalLog("Success msg : " + "[ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+						Util.PrintNormalLog("Success msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
 					else:
-						Util.PrintErrorLog("Error msg : " + "[ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+						Util.PrintErrorLog("Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
 
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
@@ -634,6 +617,7 @@ class ApiKoreaInvestType:
 				+ "stock_name_en LIKE '%" + name + "%' "
 				+ "ORDER BY stock_capitalization DESC"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 
@@ -656,6 +640,7 @@ class ApiKoreaInvestType:
 					+ "stock_name_en LIKE '%" + name + "%')"
 					+ "ORDER BY stock_capitalization DESC"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(query_str)
 
@@ -677,6 +662,7 @@ class ApiKoreaInvestType:
 					+ "stock_name_en LIKE '%" + name + "%')"
 					+ "ORDER BY stock_capitalization DESC"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(query_str)
 
@@ -697,6 +683,7 @@ class ApiKoreaInvestType:
 				+ "ORDER BY stock_capitalization DESC "
 				+ "LIMIT " + str(offset) + ", " + str(cnt)
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 
@@ -716,6 +703,7 @@ class ApiKoreaInvestType:
 				+ "ORDER BY stock_capitalization DESC "
 				+ "LIMIT " + str(offset) + ", " + str(cnt)
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 			
@@ -743,6 +731,7 @@ class ApiKoreaInvestType:
 					+ "FROM stock_info WHERE "
 					+ "stock_code='" + val[0] + "'"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(query_str)
 				ret.append(cursor.fetchall()[0])
@@ -766,6 +755,7 @@ class ApiKoreaInvestType:
 					+ "FROM stock_info WHERE "
 					+ "stock_code='" + val[0] + "'"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(query_str)
 				ret.append(cursor.fetchall()[0])
@@ -779,6 +769,7 @@ class ApiKoreaInvestType:
 	def UpdateAllQuery(self) -> bool:
 		try:
 			delete_list_query = "DELETE FROM stock_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(delete_list_query)
 			
@@ -815,6 +806,7 @@ class ApiKoreaInvestType:
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(exist_query_str)
 			exist_ret = cursor.fetchall()
@@ -861,6 +853,7 @@ class ApiKoreaInvestType:
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(exist_query_str)
 			exist_ret = cursor.fetchall()

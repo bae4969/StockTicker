@@ -12,8 +12,6 @@ from datetime import timedelta
 
 class ApiBithumbType:
 	__sql_connection:pymysql.Connection = None
-	__sql_thread:threading.Thread = None
-	__sql_stop_flag:bool = True
 
 	__API_BASE_URL:str = "https://api.bithumb.com/public"
 
@@ -40,17 +38,13 @@ class ApiBithumbType:
 			autocommit=True
 		)
 
-		self.__sql_connection.ping(reconnect=True)
-
 		self.__create_coin_info_table()
 		self.__update_coin_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
-		self.__start_sql_ping()
 
 	def __del__(self):
 		self.StopCollecting()
-		self.__stop_sql_ping()
 
 
 	def __create_coin_info_table(self) -> None:
@@ -70,6 +64,7 @@ class ApiBithumbType:
 				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 			)
 
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(table_query_str)
 
@@ -121,6 +116,7 @@ class ApiBithumbType:
 					+ "coin_price='" + val["closing_price"] + "',"
 					+ "coin_amount='" + val["acc_trade_value_24H"] + "'"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(coin_query_str)
 
@@ -140,6 +136,7 @@ class ApiBithumbType:
 				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 				)
 			
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(create_table_query)
 
@@ -148,6 +145,7 @@ class ApiBithumbType:
 	def __load_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
@@ -162,6 +160,7 @@ class ApiBithumbType:
 	def __sync_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(select_query)
 
@@ -190,25 +189,6 @@ class ApiBithumbType:
 
 	##########################################################################
  
-
-	def __execute_sql_ping(self):
-		while self.__sql_stop_flag == False:
-			try:
-				self.__sql_connection.ping(reconnect=True)
-			except:
-				Util.PrintNormalLog("Fail to send ping to sql server")
-
-			time.sleep(1.0)
-
-	def __start_sql_ping(self):
-		self.__sql_stop_flag = False
-		self.__sql_thread = threading.Thread(target=self.__execute_sql_ping)
-		self.__sql_thread.start()
-
-	def __stop_sql_ping(self):
-		self.__sql_stop_flag = True
-		self.__sql_thread.join()
-
 
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
@@ -286,6 +266,7 @@ class ApiBithumbType:
 			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
 		)
 
+		self.__sql_connection.ping(reconnect=True)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(create_raw_table_query_str)
 		cursor.execute(create_candle_table_query_str)
@@ -310,6 +291,7 @@ class ApiBithumbType:
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
 
+		self.__sql_connection.ping(reconnect=True)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(orderbook_table_query_str)
 
@@ -321,6 +303,7 @@ class ApiBithumbType:
 			+ ")"
 		)
 
+		self.__sql_connection.ping(reconnect=True)
 		cursor = self.__sql_connection.cursor()
 		cursor.execute(orderbook_table_query_str)
 
@@ -330,23 +313,27 @@ class ApiBithumbType:
 
 	def __on_recv_coin_execution(self, msg_json:json) -> None:
 		for data in msg_json["content"]["list"]:
-			from_to = data["symbol"].split("_")
-			dt_str = data["contDtm"].split(".")
+			try:
+				from_to = data["symbol"].split("_")
+				dt_str = data["contDtm"].split(".")
 
-			coin_code = from_to[0]
-			dt = DateTime.strptime(dt_str[0], "%Y-%m-%d %H:%M:%S")
-			price = float(data["contPrice"])
-			volume = float(data["contQty"])
+				coin_code = from_to[0]
+				dt = DateTime.strptime(dt_str[0], "%Y-%m-%d %H:%M:%S")
+				price = float(data["contPrice"])
+				volume = float(data["contQty"])
 
-			if data["buySellGb"] == "1":
-				self.__update_coin_execution_table(coin_code, dt, price, 0, volume, 0)
-			elif data["buySellGb"] == "2":
-				self.__update_coin_execution_table(coin_code, dt, price, 0, 0, volume)
-			else:
-				self.__update_coin_execution_table(coin_code, dt, price, volume, 0, 0)
+				if data["buySellGb"] == "1":
+					self.__update_coin_execution_table(coin_code, dt, price, 0, volume, 0)
+				elif data["buySellGb"] == "2":
+					self.__update_coin_execution_table(coin_code, dt, price, 0, 0, volume)
+				else:
+					self.__update_coin_execution_table(coin_code, dt, price, volume, 0, 0)
+
+			except Exception as e:
+				raise Exception("[ coin execution ][ %s ][ %s ]"%(coin_code, e.__str__()))
 
 	def __on_recv_coin_orderbook(self, msg_json:json) -> None:
-		print(json.dumps(msg_json["content"]))
+		return
 		# {
 		# 	"type": "orderbooksnapshot",
 		# 	"content": {			//매수,매도 30호가 제공
@@ -382,9 +369,9 @@ class ApiBithumbType:
 
 			if "status" in msg_json:
 				if msg_json["status"] == "0000":
-					Util.PrintNormalLog("Success msg : " + "[ %s ]"%(msg_json["resmsg"]))
+					Util.PrintNormalLog("Success msg : [ %s ]"%(msg_json["resmsg"]))
 				else:
-					Util.PrintErrorLog("Success msg : " + "[ %s ]"%(msg_json["resmsg"]))
+					Util.PrintErrorLog("Success msg : [ %s ]"%(msg_json["resmsg"]))
 
 			elif "type" in msg_json:
 				if msg_json["type"] == "transaction": self.__on_recv_coin_execution(msg_json)
@@ -436,6 +423,7 @@ class ApiBithumbType:
 				+ "coin_name_en LIKE '%" + name + "%' "
 				+ "ORDER BY coin_order ASC"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 
@@ -453,6 +441,7 @@ class ApiBithumbType:
 				+ "ORDER BY coin_order ASC "
 				+ "LIMIT " + str(offset) + ", " + str(cnt)
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 
@@ -475,6 +464,7 @@ class ApiBithumbType:
 					+ "FROM coin_info WHERE "
 					+ "coin_code='" + val[0] + "'"
 				)
+				self.__sql_connection.ping(reconnect=True)
 				cursor = self.__sql_connection.cursor()
 				cursor.execute(query_str)
 				ret.append(cursor.fetchall()[0])
@@ -488,6 +478,7 @@ class ApiBithumbType:
 	def UpdateAllQuery(self) -> bool:
 		try:
 			delete_list_query = "DELETE FROM coin_last_ws_query"
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(delete_list_query)
 
@@ -519,6 +510,7 @@ class ApiBithumbType:
 				+ "FROM coin_info WHERE "
 				+ "coin_code='" + coin_code +"'"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 			sql_ret = cursor.fetchall()
@@ -543,6 +535,7 @@ class ApiBithumbType:
 				+ "FROM coin_info WHERE "
 				+ "coin_code='" + coin_code +"'"
 			)
+			self.__sql_connection.ping(reconnect=True)
 			cursor = self.__sql_connection.cursor()
 			cursor.execute(query_str)
 			sql_ret = cursor.fetchall()

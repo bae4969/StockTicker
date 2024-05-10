@@ -19,8 +19,7 @@ ki = API_KI(
     Define.SQL_ID,
     Define.SQL_PW,
     Define.SQL_KI_DB,
-    Define.APP_KEY,
-    Define.APP_SECRET,
+    Define.KI_API_KEY_LIST,
     )
 
 last_datetime = DateTime.now().replace(hour=3, minute=0, second=0) + TimeDelta(days=1)

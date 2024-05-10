@@ -3,6 +3,7 @@ import requests
 import websocket
 import pymysql
 import json
+import queue
 import threading
 import os
 import time
@@ -29,21 +30,18 @@ def GetUsQueryCount(query_list:dict) -> int:
 	return cnt
 
 class ApiKoreaInvestType:
-	__sql_connection:pymysql.Connection = None
-	__app_key:str = ""
-	__app_secret:str = ""
+	__sql_common_connection:pymysql.Connection = None
+	__sql_query_connection:pymysql.Connection = None
+	__sql_is_stop:bool = False
+	__sql_thread:threading.Thread = None
+	__sql_query_queue:queue.Queue = queue.Queue()
 
 	__API_BASE_URL:str = "https://openapi.koreainvestment.com:9443"
-	__api_token_type:str = ""
-	__api_token_val:str = ""
-	__api_token_valid_datetime:DateTime = DateTime.min
-	__api_header:dict = {}
+	__api_key_list:list = []	# token_type, token_str, token_datetime, token_header
+	__api_token_list:dict = {}
 
 	__WS_BASE_URL:str = "ws://ops.koreainvestment.com:21000"
-	__ws_approval_key:str = ""
-	__ws_app:websocket.WebSocketApp = None
-	__ws_thread:threading.Thread = None
-	__ws_is_opened:bool = False
+	__ws_app_list:list = []
 
 	__ws_query_type:str = "KR"
 	__ws_query_list_buf:dict = {}
@@ -54,8 +52,8 @@ class ApiKoreaInvestType:
 	##########################################################################
 
 
-	def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str, app_key:str, app_secret:str):
-		self.__sql_connection = pymysql.connect(
+	def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str, api_key_list:list):
+		self.__sql_common_connection = pymysql.connect(
 			host = sql_host,
 			port = 3306,
 			user = sql_id,
@@ -64,15 +62,24 @@ class ApiKoreaInvestType:
 			charset = 'utf8',
 			autocommit=True,
 		)
-		self.__app_key = app_key
-		self.__app_secret = app_secret
+		self.__sql_query_connection = pymysql.connect(
+			host = sql_host,
+			port = 3306,
+			user = sql_id,
+			passwd = sql_pw,
+			charset = 'utf8',
+			autocommit=True,
+		)
+		self.__api_key_list = api_key_list
 
 		self.__create_stock_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
+		self.__start_dequeue_sql_query()
 
 	def __del__(self):
 		self.StopCollecting()
+		self.__stop_dequeue_sql_query()
 
 
 	def __create_stock_info_table(self) -> None:
@@ -96,8 +103,8 @@ class ApiKoreaInvestType:
 				+ ")COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 			)
 
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(table_query_str)
 
 		except: raise Exception("Fail to create stock info table")
@@ -116,8 +123,8 @@ class ApiKoreaInvestType:
 				+ "CONSTRAINT FK_stock_list_last_query_stock_info FOREIGN KEY (stock_code) REFERENCES stock_info (stock_code) ON UPDATE CASCADE ON DELETE CASCADE"
 				+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 				)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(create_table_query)
 
 		except: raise Exception("Fail to create last websocket query table")
@@ -125,8 +132,8 @@ class ApiKoreaInvestType:
 	def __load_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM stock_last_ws_query"
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
@@ -135,13 +142,13 @@ class ApiKoreaInvestType:
 				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3], info[4]]
 
 		except: raise Exception("Fail to load last websocket query table")
-		
+
 
 	def __sync_last_ws_query_table(self) -> None:
 		try:
 			select_query = "SELECT * FROM stock_last_ws_query"
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
 
 			last_query_list = cursor.fetchall()
@@ -153,126 +160,204 @@ class ApiKoreaInvestType:
 
 	def __create_token(self) -> None:
 		try:
+			self.__api_token_list.clear()
+
 			file = open("./doc/last_token_info.dat", 'r')
-			strs = file.read().split("\n")
+			file_all_string = file.read()
 			file.close()
 
-			last_api_token_type = strs[0]
-			last_api_token_val = strs[1]
-			last_api_token_valid_datetime = DateTime.strptime(strs[2], "%Y-%m-%d %H:%M:%S")
+			file_data = json.loads(file_all_string)
 
-			remain_sec = (last_api_token_valid_datetime - DateTime.now()).seconds
+			for api_key in self.__api_key_list:
+				cur_key = api_key["KEY"]
+				cur_secret = api_key["SECRET"]
+				if cur_key not in file_data: continue
+				
+				try:
+					token_type = file_data[cur_key]["TOKEN_TYPE"]
+					token_val = file_data[cur_key]["TOKEN_VAL"]
+					token_datetime = DateTime.strptime(file_data[cur_key]["TOKEN_DATETIME"], "%Y-%m-%d %H:%M:%S")
+					token_header = {
+						"content-type" : "application/json; charset=utf-8",
+						"authorization" : token_type + " " + token_val,
+						"appkey" : cur_key,
+						"appsecret" : cur_secret,
+						"custtype" : "P"
+					}
+					remain_sec = (token_datetime - DateTime.now()).seconds
+					
+					if remain_sec > 86220:
+						self.__api_token_list[cur_key] = {
+							"TOKEN_TYPE" : token_type,
+							"TOKEN_VAL" : token_val,
+							"TOKEN_DATETIME" : token_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+							"TOKEN_HEADER" : token_header,
+						}
+					elif remain_sec > 43200:
+						api_url = "/oauth2/revokeP"
+						api_body = {
+							"grant_type" : "client_credentials",
+							"appkey" : cur_key,
+							"appsecret" : cur_secret,
+							"token" : token_val
+						}
+						response = requests.post (
+							url = self.__API_BASE_URL + api_url,
+							data = json.dumps(api_body),
+						)
 
-			# 토큰이 생긴지 3분도 안 되었다면 그냥 사용
-			if remain_sec > 86220:
-				self.__api_token_type = last_api_token_type
-				self.__api_token_val = last_api_token_val
-				self.__api_token_valid_datetime = last_api_token_valid_datetime
-				self.__api_header = {
-					"content-type" : "application/json; charset=utf-8",
-					"authorization" : self.__api_token_type + " " + self.__api_token_val,
-					"appkey" : self.__app_key,
-					"appsecret" : self.__app_secret,
-					"custtype" : "P"
-				}
-				return
+				except: pass
 
-			# 마지막 토큰이 생성된지 대략 12시간도 안 되었다면 토큰 패기 요청 보냄
-			# 안 그러면 같은 유효기간의 토큰이 생성됨
-			if remain_sec < 43200:
-				api_url = "/oauth2/revokeP"
+			os.remove("./doc/last_token_info.dat")
+
+		except: pass
+
+		try:
+			for api_key in self.__api_key_list:
+				cur_key = api_key["KEY"]
+				cur_secret = api_key["SECRET"]
+				if cur_key in self.__api_token_list: continue
+
+				api_url = "/oauth2/tokenP"
 				api_body = {
 					"grant_type" : "client_credentials",
-					"appkey" : self.__app_key,
-					"appsecret" : self.__app_secret,
-					"token" : last_api_token_val
+					"appkey" : cur_key,
+					"appsecret" : cur_secret,
 				}
 				response = requests.post (
 					url = self.__API_BASE_URL + api_url,
 					data = json.dumps(api_body),
 				)
-				os.remove("./doc/last_token_info.dat")
 
-		except: pass
+				rep_json = json.loads(response.text)
 
-		try:
-			api_url = "/oauth2/tokenP"
-			api_body = {
-				"grant_type" : "client_credentials",
-				"appkey" : self.__app_key,
-				"appsecret" : self.__app_secret,
-			}
-			response = requests.post (
-				url = self.__API_BASE_URL + api_url,
-				data = json.dumps(api_body),
-			)
-
-			rep_json = json.loads(response.text)
-
-			self.__api_token_type = rep_json["token_type"]
-			self.__api_token_val = rep_json["access_token"]
-			self.__api_token_valid_datetime = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
-			self.__api_header = {
-				"content-type" : "application/json; charset=utf-8",
-				"authorization" : self.__api_token_type + " " + self.__api_token_val,
-				"appkey" : self.__app_key,
-				"appsecret" : self.__app_secret,
-				"custtype" : "P"
-			}
-			
-			file_str_list = [
-				self.__api_token_type,
-				self.__api_token_val,
-				self.__api_token_valid_datetime.strftime("%Y-%m-%d %H:%M:%S")
-			]
-				
-			file = open("./doc/last_token_info.dat", 'w')
-			file.write("\n".join(file_str_list))
-			file.close()
+				token_type = rep_json["token_type"]
+				token_val = rep_json["access_token"]
+				token_datetime = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
+				token_header = {
+					"content-type" : "application/json; charset=utf-8",
+					"authorization" : token_type + " " + token_val,
+					"appkey" : cur_key,
+					"appsecret" : cur_secret,
+					"custtype" : "P"
+				}
+				self.__api_token_list[cur_key] = {
+					"TOKEN_TYPE" : token_type,
+					"TOKEN_VAL" : token_val,
+					"TOKEN_DATETIME" : token_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+					"TOKEN_HEADER" : token_header,
+				}
 
 		except: raise Exception("Fail to create access token for KoreaInvest Api")
-
-	def __create_approval_key(self) -> None:
-		try:
-			api_url = "/oauth2/Approval"
-			api_header = {
-				"content-type" : "application/json; utf-8"
-			}
-			api_body = {
-				"grant_type" : "client_credentials",
-				"appkey" : self.__app_key,
-				"secretkey" : self.__app_secret,
-			}
-			response = requests.post (
-				url = self.__API_BASE_URL + api_url,
-				headers = api_header,
-				data = json.dumps(api_body),
-			)
-
-			rep_json = json.loads(response.text)
-
-			self.__ws_approval_key = rep_json["approval_key"]
 			
-		except: raise Exception("Fail to create web socket approval key")
- 
+		try:
+			file = open("./doc/last_token_info.dat", 'w')
+			file.write(self.__api_token_list.__str__().replace("'", "\""))
+			file.close()
+
+		except: Util.PrintErrorLog("Fail to create access token for KoreaInvest Api")
+
 	def __create_websocket_app(self) -> None:
 		try:
-			if self.__ws_app != None:
-				self.__ws_app.close()
-			self.__ws_app = websocket.WebSocketApp(
-				url = self.__WS_BASE_URL,
-				on_message= self.__on_ws_recv_message,
-				on_open= self.__on_ws_open,
-				on_close= self.__on_ws_close,
+			for ws_app in self.__ws_app_list:
+				ws_app["WS_APP"].close()
+			self.__ws_app_list.clear()
+
+			for api_key in self.__api_key_list:
+				cur_key = api_key["KEY"]
+				cur_secret = api_key["SECRET"]
+
+				api_url = "/oauth2/Approval"
+				api_header = {
+					"content-type" : "application/json; utf-8"
+				}
+				api_body = {
+					"grant_type" : "client_credentials",
+					"appkey" : cur_key,
+					"secretkey" : cur_secret,
+				}
+				response = requests.post (
+					url = self.__API_BASE_URL + api_url,
+					headers = api_header,
+					data = json.dumps(api_body),
 				)
-			self.__ws_thread = threading.Thread(target=self.__ws_app.run_forever)
-			self.__ws_thread.start()
+
+				rep_json = json.loads(response.text)
+
+				
+				approval_key = rep_json["approval_key"]
+				ws_app = websocket.WebSocketApp(
+					url = self.__WS_BASE_URL,
+					on_message= self.__on_ws_recv_message,
+					on_open= self.__on_ws_open,
+					on_close= self.__on_ws_close,
+				)
+				ws_thread = threading.Thread(target=ws_app.run_forever)
+
+				self.__ws_app_list.append({
+					"APPROVAL_KEY" : approval_key,
+					"WS_APP" : ws_app,
+					"WS_THREAD" : ws_thread,
+					"WS_IS_OPENED" : False,
+					"WS_QUERY_LIST" : [],
+				})
+
+			if len(self.__ws_app_list) == 0:
+				raise
+			
+			app_idx = 0
+			for val in self.__ws_query_list_cur.values():
+				if (self.__ws_query_type == "KR" and 
+					val[1].find("KOSPI") == -1 and
+					val[1].find("KOSDAQ") == -1 and
+					val[1].find("KONEX") == -1
+					) or (
+					self.__ws_query_type == "EX" and 
+					val[1].find("NYSE") == -1 and
+					val[1].find("NASDAQ") == -1
+					): continue
+				
+				self.__ws_app_list[app_idx]["WS_QUERY_LIST"].append(val)
+				
+				app_idx += 1
+				if app_idx >= len(self.__ws_app_list):
+					app_idx = 0
+
+			for ws_app in self.__ws_app_list:
+				ws_app["WS_THREAD"].start()
 			
 		except: raise Exception("Fail to create web socket approval key")
+
+	def __get_websocket_query_limit(self) -> int:
+		return 40 * len(self.__api_key_list)
 
 
 	##########################################################################
  
+
+	def __start_dequeue_sql_query(self) -> None:
+		self.__sql_is_stop = False
+		self.__sql_thread = threading.Thread(target=self.__func_dequeue_sql_query)
+		self.__sql_thread.start()
+		
+	def __stop_dequeue_sql_query(self) -> None:
+		self.__sql_is_stop = True
+		self.__sql_thread.join()
+
+	def __func_dequeue_sql_query(self) -> None:
+		while self.__sql_is_stop == False:
+			self.__sql_query_connection.ping(reconnect=True)
+			cursor = self.__sql_query_connection.cursor()
+			while self.__sql_query_queue.empty() == False:
+				cursor.execute(self.__sql_query_queue.get())
+
+			time.sleep(0.2)
+		
+		self.__sql_query_connection.ping(reconnect=True)
+		cursor = self.__sql_query_connection.cursor()
+		while self.__sql_query_queue.empty() == False:
+			cursor.execute(self.__sql_query_queue.get())
+
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		table_name = (
@@ -291,8 +376,8 @@ class ApiKoreaInvestType:
 		ask_amount_str = str(price * ask_volume)
 		bid_amount_str = str(price * bid_volume)
 		
-		create_raw_table_query_str = (
-			"CREATE TABLE IF NOT EXISTS stock_execution_raw_" + table_name + " ("
+		self.__sql_query_queue.put(
+			"CREATE TABLE IF NOT EXISTS TickerRaw.stock_ex_" + table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
 			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -300,8 +385,8 @@ class ApiKoreaInvestType:
 			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
-		create_candle_table_query_str = (
-			"CREATE TABLE IF NOT EXISTS stock_execution_candle_" + table_name + " ("
+		self.__sql_query_queue.put(
+			"CREATE TABLE IF NOT EXISTS TickerCandle.stock_ex_" + table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
 			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -316,8 +401,8 @@ class ApiKoreaInvestType:
 			+ "PRIMARY KEY (execution_datetime) USING BTREE"
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 		)
-		insert_raw_table_query_str = (
-			"INSERT INTO stock_execution_raw_" + table_name + " VALUES ("
+		self.__sql_query_queue.put(
+			"INSERT INTO TickerRaw.stock_ex_" + table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + non_volume_str + "',"
@@ -325,8 +410,8 @@ class ApiKoreaInvestType:
 			+ "'" + bid_volume_str + "' "
 			+ ")"
 		)
-		insert_candle_table_query_str = (
-			"INSERT INTO stock_execution_candle_" + table_name + " VALUES ("
+		self.__sql_query_queue.put(
+			"INSERT INTO TickerCandle.stock_ex_" + table_name + " VALUES ("
 			+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
@@ -349,13 +434,6 @@ class ApiKoreaInvestType:
 			+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
 			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
 		)
-
-		self.__sql_connection.ping(reconnect=True)
-		cursor = self.__sql_connection.cursor()
-		cursor.execute(create_raw_table_query_str)
-		cursor.execute(create_candle_table_query_str)
-		cursor.execute(insert_raw_table_query_str)
-		cursor.execute(insert_candle_table_query_str)
 
 	def __update_stock_orderbook_table(self, stock_code:str, dt:DateTime, data) -> None:
 		# TODO
@@ -382,8 +460,8 @@ class ApiKoreaInvestType:
 			+ ")"
 		)
 
-		self.__sql_connection.ping(reconnect=True)
-		cursor = self.__sql_connection.cursor()
+		self.__sql_common_connection.ping(reconnect=True)
+		cursor = self.__sql_common_connection.cursor()
 		cursor.execute(create_orderbook_table_query_str)
 		cursor.execute(insert_orderbook_table_query_str)
 
@@ -510,23 +588,40 @@ class ApiKoreaInvestType:
 		""" 넘겨받는데이터가 정상인지 확인
 		print("stockhoka[%s]"%(data))
 		"""
+		
 		recvvalue = data.split('^')  # 수신데이터를 split '^'
 
 		print("실시간종목코드 [" + recvvalue[0] + "]" + ", 종목코드 [" + recvvalue[1] + "]")
 		print("소숫점자리수 [" + recvvalue[2] + "]")
 		print("현지일자 [" + recvvalue[3] + "]" + ", 현지시간 [" + recvvalue[4] + "]")
 		print("한국일자 [" + recvvalue[5] + "]" + ", 한국시간 [" + recvvalue[6] + "]")
+		print("======================================")    
+		print("매도호가10 [%s]    잔량10 [%s]" % (recvvalue[66], recvvalue[68]))
+		print("매도호가09 [%s]    잔량09 [%s]" % (recvvalue[60], recvvalue[62]))
+		print("매도호가08 [%s]    잔량08 [%s]" % (recvvalue[54], recvvalue[56]))
+		print("매도호가07 [%s]    잔량07 [%s]" % (recvvalue[48], recvvalue[50]))
+		print("매도호가06 [%s]    잔량06 [%s]" % (recvvalue[42], recvvalue[44]))
+		print("매도호가05 [%s]    잔량05 [%s]" % (recvvalue[36], recvvalue[38]))
+		print("매도호가04 [%s]    잔량04 [%s]" % (recvvalue[30], recvvalue[32]))
+		print("매도호가03 [%s]    잔량03 [%s]" % (recvvalue[24], recvvalue[26]))
+		print("매도호가02 [%s]    잔량02 [%s]" % (recvvalue[18], recvvalue[20]))
+		print("매도호가01 [%s]    잔량01 [%s]" % (recvvalue[12], recvvalue[14]))
+		print("--------------------------------------")
+		print("매수호가01 [%s]    잔량01 [%s]" % (recvvalue[11], recvvalue[13]))
+		print("매수호가02 [%s]    잔량02 [%s]" % (recvvalue[17], recvvalue[19]))
+		print("매수호가03 [%s]    잔량03 [%s]" % (recvvalue[23], recvvalue[25]))
+		print("매수호가04 [%s]    잔량04 [%s]" % (recvvalue[29], recvvalue[31]))
+		print("매수호가05 [%s]    잔량05 [%s]" % (recvvalue[35], recvvalue[37]))
+		print("매수호가06 [%s]    잔량06 [%s]" % (recvvalue[41], recvvalue[43]))
+		print("매수호가07 [%s]    잔량07 [%s]" % (recvvalue[47], recvvalue[49]))
+		print("매수호가08 [%s]    잔량08 [%s]" % (recvvalue[53], recvvalue[55]))
+		print("매수호가09 [%s]    잔량09 [%s]" % (recvvalue[59], recvvalue[61]))
+		print("매수호가10 [%s]    잔량10 [%s]" % (recvvalue[65], recvvalue[67]))
 		print("======================================")
 		print("매수총 잔량        [%s]" % (recvvalue[7]))
 		print("매수총잔량대비      [%s]" % (recvvalue[9]))
 		print("매도총 잔량        [%s]" % (recvvalue[8]))
 		print("매도총잔략대비      [%s]" % (recvvalue[10]))
-		print("매수호가           [%s]" % (recvvalue[11]))
-		print("매도호가           [%s]" % (recvvalue[12]))
-		print("매수잔량           [%s]" % (recvvalue[13]))
-		print("매도잔량           [%s]" % (recvvalue[14]))
-		print("매수잔량대비        [%s]" % (recvvalue[15]))
-		print("매도잔량대비        [%s]" % (recvvalue[16]))
 
 
 	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str) -> None:
@@ -562,46 +657,42 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
-	def __on_ws_send_message(self, api_code:str, stock_code:str) -> None:
-		try:
-			msg = {
-				"header" : {
-					"approval_key": self.__ws_approval_key,
-					"content-type": "utf-8",
-					"custtype": "P",
-					"tr_type": "1"
-				},
-				"body" : {
-					"input": {
-						"tr_id": api_code,
-						"tr_key": stock_code
-					}
-				}
-			}
-			self.__ws_app.send(json.dumps(msg))
-		except Exception as e:
-			Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
-
 	def __on_ws_open(self, ws:websocket.WebSocketApp) -> None:
-		self.__ws_is_opened = True
-		for key, val in self.__ws_query_list_cur.items():
-			if (self.__ws_query_type == "KR" and 
-				val[1].find("KOSPI") == -1 and
-				val[1].find("KOSDAQ") == -1 and
-				val[1].find("KONEX") == -1
-				) or (
-				self.__ws_query_type == "EX" and 
-				val[1].find("NYSE") == -1 and
-				val[1].find("NASDAQ") == -1
-				): continue
-			
-			self.__on_ws_send_message(val[2], val[3])
-			time.sleep(0.5)
+		for ws_app in self.__ws_app_list:
+			if ws_app["WS_APP"] != ws: continue
+			ws_app["WS_IS_OPENED"] = True
 
+			for query_info in ws_app["WS_QUERY_LIST"]:
+				try:
+					msg = {
+						"header" : {
+							"approval_key": ws_app["APPROVAL_KEY"],
+							"content-type": "utf-8",
+							"custtype": "P",
+							"tr_type": "1"
+						},
+						"body" : {
+							"input": {
+								"tr_id": query_info[2],
+								"tr_key": query_info[3]
+							}
+						}
+					}
+					ws.send(json.dumps(msg))
+
+				except Exception as e:
+					Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
+
+				time.sleep(0.25)
+
+			break
 		Util.PrintNormalLog("Opened korea invest websocket")
 
 	def __on_ws_close(self, ws:websocket.WebSocketApp, close_code, close_msg) -> None:
-		self.__ws_is_opened = False
+		for ws_app in self.__ws_app_list:
+			if ws_app["WS_APP"] != ws: continue
+			ws_app["WS_IS_OPENED"] = False
+			break
 		Util.PrintNormalLog("Closed korea invest websocket")
 
 
@@ -617,8 +708,8 @@ class ApiKoreaInvestType:
 				+ "stock_name_en LIKE '%" + name + "%' "
 				+ "ORDER BY stock_capitalization DESC"
 			)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(query_str)
 
 			return cursor.fetchall()
@@ -640,8 +731,8 @@ class ApiKoreaInvestType:
 					+ "stock_name_en LIKE '%" + name + "%')"
 					+ "ORDER BY stock_capitalization DESC"
 				)
-				self.__sql_connection.ping(reconnect=True)
-				cursor = self.__sql_connection.cursor()
+				self.__sql_common_connection.ping(reconnect=True)
+				cursor = self.__sql_common_connection.cursor()
 				cursor.execute(query_str)
 
 				return cursor.fetchall()
@@ -662,8 +753,8 @@ class ApiKoreaInvestType:
 					+ "stock_name_en LIKE '%" + name + "%')"
 					+ "ORDER BY stock_capitalization DESC"
 				)
-				self.__sql_connection.ping(reconnect=True)
-				cursor = self.__sql_connection.cursor()
+				self.__sql_common_connection.ping(reconnect=True)
+				cursor = self.__sql_common_connection.cursor()
 				cursor.execute(query_str)
 
 				return cursor.fetchall()
@@ -683,8 +774,8 @@ class ApiKoreaInvestType:
 				+ "ORDER BY stock_capitalization DESC "
 				+ "LIMIT " + str(offset) + ", " + str(cnt)
 			)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(query_str)
 
 			return cursor.fetchall()
@@ -703,8 +794,8 @@ class ApiKoreaInvestType:
 				+ "ORDER BY stock_capitalization DESC "
 				+ "LIMIT " + str(offset) + ", " + str(cnt)
 			)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(query_str)
 			
 			return cursor.fetchall()
@@ -731,8 +822,8 @@ class ApiKoreaInvestType:
 					+ "FROM stock_info WHERE "
 					+ "stock_code='" + val[0] + "'"
 				)
-				self.__sql_connection.ping(reconnect=True)
-				cursor = self.__sql_connection.cursor()
+				self.__sql_common_connection.ping(reconnect=True)
+				cursor = self.__sql_common_connection.cursor()
 				cursor.execute(query_str)
 				ret.append(cursor.fetchall()[0])
 
@@ -755,8 +846,8 @@ class ApiKoreaInvestType:
 					+ "FROM stock_info WHERE "
 					+ "stock_code='" + val[0] + "'"
 				)
-				self.__sql_connection.ping(reconnect=True)
-				cursor = self.__sql_connection.cursor()
+				self.__sql_common_connection.ping(reconnect=True)
+				cursor = self.__sql_common_connection.cursor()
 				cursor.execute(query_str)
 				ret.append(cursor.fetchall()[0])
 
@@ -769,8 +860,8 @@ class ApiKoreaInvestType:
 	def UpdateAllQuery(self) -> bool:
 		try:
 			delete_list_query = "DELETE FROM stock_last_ws_query"
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(delete_list_query)
 			
 			varified_list = {}
@@ -806,23 +897,23 @@ class ApiKoreaInvestType:
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(exist_query_str)
 			exist_ret = cursor.fetchall()
 			if len(exist_ret) == 0: return -500
 			
 			stock_market = exist_ret[0][0]
 			if stock_market == "NYSE":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSCNT0"
 				api_stock_code = "DNYS" + stock_code
 			elif stock_market == "NASDAQ":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSCNT0"
 				api_stock_code = "DNAS" + stock_code
 			else:
-				if GetKrQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "H0STCNT0"
 				api_stock_code = stock_code
 
@@ -853,23 +944,23 @@ class ApiKoreaInvestType:
 				+ "FROM stock_info WHERE "
 				+ "stock_code='" + stock_code +"'"
 			)
-			self.__sql_connection.ping(reconnect=True)
-			cursor = self.__sql_connection.cursor()
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(exist_query_str)
 			exist_ret = cursor.fetchall()
 			if len(exist_ret) == 0: return -500
 
 			stock_market = exist_ret[0][0]
 			if stock_market == "NYSE":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSASP0"
 				api_stock_code = "DNYS" + stock_code
 			elif stock_market == "NASDAQ":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSASP0"
 				api_stock_code = "DNAS" + stock_code
 			else:
-				if GetKrQueryCount(self.__ws_query_list_buf) >= 40: return -501
+				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "H0STASP0"
 				api_stock_code = stock_code
 
@@ -900,7 +991,11 @@ class ApiKoreaInvestType:
 
 
 	def IsCollecting(self) -> bool:
-		return self.__ws_is_opened
+		for ws_app in self.__ws_app_list:
+			if ws_app["WS_IS_OPENED"] == False:
+				return False
+			
+		return True
 
 	def GetCurrentCollectingType(self) -> str:
 		return self.__ws_query_type
@@ -910,7 +1005,6 @@ class ApiKoreaInvestType:
 			self.__ws_query_type = query_type
 			self.__sync_last_ws_query_table()
 			self.__create_token()
-			self.__create_approval_key()
 			self.__create_websocket_app()
 			
 			return True
@@ -920,9 +1014,9 @@ class ApiKoreaInvestType:
 			return False
 
 	def StopCollecting(self) -> None:
-		if self.__ws_app != None:
-			self.__ws_app.close()
-			self.__ws_thread.join()
+		for ws_app in self.__ws_app_list:
+			ws_app["WS_APP"].close()
+			ws_app["WS_THREAD"].join()
 	
 
 

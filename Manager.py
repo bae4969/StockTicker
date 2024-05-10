@@ -17,8 +17,7 @@ ki = API_KI(
 	Define.SQL_ID,
 	Define.SQL_PW,
 	Define.SQL_KI_DB,
-	Define.APP_KEY,
-	Define.APP_SECRET,
+	Define.KI_API_KEY_LIST,
 	)
 
 print("\n---------------------------------------------\n")

@@ -140,6 +140,7 @@ while True:
 		print("Manager > Invalid input was detected (%s)"%e.__str__())
 		pass
 
+print("\n---------------------------------------------\n")
 
-print("---------------------------------------------\n")
-
+del bh
+del ki

@@ -1,10 +1,10 @@
 import Util
 import requests
-import websocket
+from websocket import WebSocketApp
 import pymysql
 import json
 import queue
-import threading
+from threading import Thread
 import os
 import time
 from datetime import datetime as DateTime
@@ -15,14 +15,14 @@ class ApiBithumbType:
 	__sql_common_connection:pymysql.Connection = None
 	__sql_query_connection:pymysql.Connection = None
 	__sql_is_stop:bool = False
-	__sql_thread:threading.Thread = None
+	__sql_thread:Thread = None
 	__sql_query_queue:queue.Queue = queue.Queue()
 
 	__API_BASE_URL:str = "https://api.bithumb.com/public"
 
 	__WS_BASE_URL:str = "wss://pubwss.bithumb.com/pub/ws"
-	__ws_app:websocket.WebSocketApp = None
-	__ws_thread:threading.Thread = None
+	__ws_app:WebSocketApp = None
+	__ws_thread:Thread = None
 	__ws_is_opened = False
 
 	__ws_query_list_buf = {}
@@ -52,7 +52,6 @@ class ApiBithumbType:
 		)
 
 		self.__create_coin_info_table()
-		self.__update_coin_info_table()
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
 		self.__start_dequeue_sql_query()
@@ -84,58 +83,6 @@ class ApiBithumbType:
 			cursor.execute(table_query_str)
 
 		except: raise Exception("Fail to create coin info table")
-
-	def __update_coin_info_table(self) -> None:
-		try:
-			# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
-			upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
-			upbit_rep_json = json.loads(upbit_rep.text)
-			code_kr_name_dict = {}
-			for data in upbit_rep_json:
-				try:
-					from_to = data["market"].split("-")
-					if from_to[0] != "KRW": continue
-					code_kr_name_dict[from_to[1]] = [data["korean_name"], data["english_name"]]
-				except:
-					continue
-
-			bithumb_rep = requests.get(url = "https://api.bithumb.com/public/ticker/ALL_KRW")
-			bithumb_rep_json = json.loads(bithumb_rep.text)
-			if bithumb_rep_json["status"] != "0000":
-				return False
-
-			data_list = bithumb_rep_json["data"]
-			for key in data_list:
-				if key == "date": continue
-				
-				if key in code_kr_name_dict:
-					name_kr = code_kr_name_dict[key][0]
-					name_en = code_kr_name_dict[key][1]
-				else:
-					name_kr = key
-					name_en = key
-
-				val = data_list[key]
-				coin_query_str = (
-					"INSERT INTO coin_info ("
-					+ "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
-					+ ") VALUES ("
-					+ "'" + key + "',"
-					+ "'" + name_kr + "',"
-					+ "'" + name_en + "',"
-					+ "'" + val["closing_price"] + "',"
-					+ "'" + val["acc_trade_value_24H"] + "' "
-					+ ") ON DUPLICATE KEY UPDATE "
-					+ "coin_name_kr='" + name_kr + "',"
-					+ "coin_name_en='" + name_en + "',"
-					+ "coin_price='" + val["closing_price"] + "',"
-					+ "coin_amount='" + val["acc_trade_value_24H"] + "'"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(coin_query_str)
-
-		except: raise Exception("Fail to update coin info table")
 
 	def __create_last_ws_query_table(self) -> None:
 		try:
@@ -190,13 +137,13 @@ class ApiBithumbType:
 		try:
 			if self.__ws_app != None:
 				self.__ws_app.close()
-			self.__ws_app = websocket.WebSocketApp(
+			self.__ws_app = WebSocketApp(
 				url = self.__WS_BASE_URL,
 				on_message= self.__on_ws_recv_message,
 				on_open= self.__on_ws_open,
 				on_close= self.__on_ws_close,
 				)
-			self.__ws_thread = threading.Thread(target=self.__ws_app.run_forever)
+			self.__ws_thread = Thread(name="Bithumb_WS", target=self.__ws_app.run_forever)
 			self.__ws_thread.start()
 			
 		except: raise Exception("Fail to create web socket")
@@ -207,7 +154,7 @@ class ApiBithumbType:
 
 	def __start_dequeue_sql_query(self) -> None:
 		self.__sql_is_stop = False
-		self.__sql_thread = threading.Thread(target=self.__func_dequeue_sql_query)
+		self.__sql_thread = Thread(name= "Bithumb_Dequeue", target=self.__func_dequeue_sql_query)
 		self.__sql_thread.start()
 		
 	def __stop_dequeue_sql_query(self) -> None:
@@ -219,14 +166,16 @@ class ApiBithumbType:
 			self.__sql_query_connection.ping(reconnect=True)
 			cursor = self.__sql_query_connection.cursor()
 			while self.__sql_query_queue.empty() == False:
-				cursor.execute(self.__sql_query_queue.get())
+				try: cursor.execute(self.__sql_query_queue.get())
+				except: pass
 
 			time.sleep(0.2)
 		
 		self.__sql_query_connection.ping(reconnect=True)
 		cursor = self.__sql_query_connection.cursor()
 		while self.__sql_query_queue.empty() == False:
-			cursor.execute(self.__sql_query_queue.get())
+			try: cursor.execute(self.__sql_query_queue.get())
+			except: pass
 
 
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
@@ -395,24 +344,26 @@ class ApiBithumbType:
 		# }
 	
 
-	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str) -> None:
+	def __on_ws_recv_message(self, ws:WebSocketApp, msg:str) -> None:
 		try:
 			msg_json = json.loads(msg)
 
 			if "status" in msg_json:
-				if msg_json["status"] == "0000":
-					Util.PrintNormalLog("Success msg : [ %s ]"%(msg_json["resmsg"]))
-				else:
-					Util.PrintErrorLog("Success msg : [ %s ]"%(msg_json["resmsg"]))
+				if msg_json["status"] != "0000":
+					status = msg_json["status"]
+					msg = msg_json["resmsg"]
+					Util.PrintNormalLog(f"Fail msg : [ {status}:{msg} ]")
 
 			elif "type" in msg_json:
-				if msg_json["type"] == "transaction": self.__on_recv_coin_execution(msg_json)
-				elif msg_json["type"] == "orderbooksnapshot": self.__on_recv_coin_orderbook(msg_json)
+				if msg_json["type"] == "transaction":
+					Thread(name="Bithumb_Execution", target=self.__on_recv_coin_execution(msg_json)).start()
+				elif msg_json["type"] == "orderbooksnapshot":
+					Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook(msg_json)).start()
 
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
-	def __on_ws_open(self, ws:websocket.WebSocketApp) -> None:
+	def __on_ws_open(self, ws:WebSocketApp) -> None:
 		self.__ws_is_opened = True
 		
 		buf_dict = {}
@@ -437,13 +388,13 @@ class ApiBithumbType:
 
 		Util.PrintNormalLog("Opened bithumb websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp, close_code, close_msg) -> None:
+	def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
 		self.__ws_is_opened = False
 		Util.PrintNormalLog("Closed bithumb websocket")
 
 
 	##########################################################################
-	
+
 
 	def FindCoin(self, name:str) -> list:
 		try:
@@ -598,22 +549,77 @@ class ApiBithumbType:
 	def IsCollecting(self) -> bool:
 		return self.__ws_is_opened
 
-	def StartCollecting(self) -> bool:
+	def StartCollecting(self) -> None:
 		try:
 			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
-			
-			return True
 
 		except Exception as e:
 			Util.PrintErrorLog(e.__str__())
-			return False
 
 	def StopCollecting(self) -> None:
 		if self.__ws_app != None:
 			self.__ws_app.close()
 			self.__ws_thread.join()
 	
+
+	def UpdateCoinInfo(self) -> None:
+		try:
+			# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
+			upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
+			upbit_rep_json = json.loads(upbit_rep.text)
+			code_kr_name_dict = {}
+			for data in upbit_rep_json:
+				try:
+					from_to = data["market"].split("-")
+					if from_to[0] != "KRW": continue
+					code_kr_name_dict[from_to[1]] = [data["korean_name"], data["english_name"]]
+				except:
+					continue
+
+			bithumb_rep = requests.get(url = "https://api.bithumb.com/public/ticker/ALL_KRW")
+			bithumb_rep_json = json.loads(bithumb_rep.text)
+			if bithumb_rep_json["status"] != "0000":
+				raise Exception("UPBIT REQUEST ERROR")
+
+			data_list = bithumb_rep_json["data"]
+			for key in data_list:
+				if key == "date": continue
+				
+				if key in code_kr_name_dict:
+					name_kr = code_kr_name_dict[key][0]
+					name_en = code_kr_name_dict[key][1]
+				else:
+					name_kr = key
+					name_en = key
+
+				val = data_list[key]
+				query_str = (
+					"INSERT INTO coin_info ("
+					+ "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
+					+ ") VALUES ("
+					+ "'" + key + "',"
+					+ "'" + name_kr + "',"
+					+ "'" + name_en + "',"
+					+ "'" + val["closing_price"] + "',"
+					+ "'" + val["acc_trade_value_24H"] + "' "
+					+ ") ON DUPLICATE KEY UPDATE "
+					+ "coin_name_kr='" + name_kr + "',"
+					+ "coin_name_en='" + name_en + "',"
+					+ "coin_price='" + val["closing_price"] + "',"
+					+ "coin_amount='" + val["acc_trade_value_24H"] + "'"
+				)
+				
+				self.__sql_common_connection.ping(reconnect=True)
+				cursor = self.__sql_common_connection.cursor()
+				cursor.execute(query_str)
+
+				
+			Util.PrintNormalLog("Success to update coin info")
+
+		except Exception as e: 
+			Util.PrintErrorLog("Fail to update coin info : " + e.__str__())
+
 
 
 

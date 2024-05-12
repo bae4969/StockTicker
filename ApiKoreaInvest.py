@@ -1,11 +1,16 @@
 import Util
 import requests
-import websocket
+from websocket import WebSocketApp
 import pymysql
 import json
 import queue
-import threading
+from threading import Thread
 import os
+import pandas as pd
+import urllib.request
+import ssl
+import glob
+import zipfile
 import time
 from datetime import datetime as DateTime
 from datetime import timedelta
@@ -24,7 +29,8 @@ def GetUsQueryCount(query_list:dict) -> int:
 	cnt = 0
 	for key, val in query_list.items():
 		if (val[1].find("NYSE") != -1 or
-			val[1].find("NASDAQ") != -1):
+			val[1].find("NASDAQ") != -1 or
+			val[1].find("AMEX") != -1):
 			cnt += 1
 
 	return cnt
@@ -33,15 +39,14 @@ class ApiKoreaInvestType:
 	__sql_common_connection:pymysql.Connection = None
 	__sql_query_connection:pymysql.Connection = None
 	__sql_is_stop:bool = False
-	__sql_thread:threading.Thread = None
+	__sql_thread:Thread = None
 	__sql_query_queue:queue.Queue = queue.Queue()
 
 	__API_BASE_URL:str = "https://openapi.koreainvestment.com:9443"
-	__api_key_list:list = []	# token_type, token_str, token_datetime, token_header
-	__api_token_list:dict = {}
+	__api_key_list:list = []	# KEY, SECRET, TOKEN_TYPE, TOKEN_VAL, TOKEN_DATETIME, TOKEN_HEADER
 
 	__WS_BASE_URL:str = "ws://ops.koreainvestment.com:21000"
-	__ws_app_list:list = []
+	__ws_app_list:list = []		# APPROVAL_KEY, WS_APP, WS_THREAD, WS_IS_OPENED, WS_QUERY_LIST
 
 	__ws_query_type:str = "KR"
 	__ws_query_list_buf:dict = {}
@@ -90,13 +95,9 @@ class ApiKoreaInvestType:
 				+ "stock_name_kr VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_market VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
-				+ "stock_country VARCHAR(64) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
-				+ "stock_sector VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
-				+ "stock_industry VARCHAR(128) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_count BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_capitalization DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-				+ "stock_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
 				+ "PRIMARY KEY (stock_code) USING BTREE,"
 				+ "UNIQUE INDEX stock_code (stock_code) USING BTREE,"
 				+ "INDEX stock_name (stock_name_kr, stock_name_en) USING BTREE"
@@ -158,105 +159,6 @@ class ApiKoreaInvestType:
 
 		except: raise Exception("Fail to load last websocket query table")
 
-	def __create_token(self) -> None:
-		try:
-			self.__api_token_list.clear()
-
-			file = open("./doc/last_token_info.dat", 'r')
-			file_all_string = file.read()
-			file.close()
-
-			file_data = json.loads(file_all_string)
-
-			for api_key in self.__api_key_list:
-				cur_key = api_key["KEY"]
-				cur_secret = api_key["SECRET"]
-				if cur_key not in file_data: continue
-				
-				try:
-					token_type = file_data[cur_key]["TOKEN_TYPE"]
-					token_val = file_data[cur_key]["TOKEN_VAL"]
-					token_datetime = DateTime.strptime(file_data[cur_key]["TOKEN_DATETIME"], "%Y-%m-%d %H:%M:%S")
-					token_header = {
-						"content-type" : "application/json; charset=utf-8",
-						"authorization" : token_type + " " + token_val,
-						"appkey" : cur_key,
-						"appsecret" : cur_secret,
-						"custtype" : "P"
-					}
-					remain_sec = (token_datetime - DateTime.now()).seconds
-					
-					if remain_sec > 86220:
-						self.__api_token_list[cur_key] = {
-							"TOKEN_TYPE" : token_type,
-							"TOKEN_VAL" : token_val,
-							"TOKEN_DATETIME" : token_datetime.strftime("%Y-%m-%d %H:%M:%S"),
-							"TOKEN_HEADER" : token_header,
-						}
-					elif remain_sec > 43200:
-						api_url = "/oauth2/revokeP"
-						api_body = {
-							"grant_type" : "client_credentials",
-							"appkey" : cur_key,
-							"appsecret" : cur_secret,
-							"token" : token_val
-						}
-						response = requests.post (
-							url = self.__API_BASE_URL + api_url,
-							data = json.dumps(api_body),
-						)
-
-				except: pass
-
-			os.remove("./doc/last_token_info.dat")
-
-		except: pass
-
-		try:
-			for api_key in self.__api_key_list:
-				cur_key = api_key["KEY"]
-				cur_secret = api_key["SECRET"]
-				if cur_key in self.__api_token_list: continue
-
-				api_url = "/oauth2/tokenP"
-				api_body = {
-					"grant_type" : "client_credentials",
-					"appkey" : cur_key,
-					"appsecret" : cur_secret,
-				}
-				response = requests.post (
-					url = self.__API_BASE_URL + api_url,
-					data = json.dumps(api_body),
-				)
-
-				rep_json = json.loads(response.text)
-
-				token_type = rep_json["token_type"]
-				token_val = rep_json["access_token"]
-				token_datetime = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
-				token_header = {
-					"content-type" : "application/json; charset=utf-8",
-					"authorization" : token_type + " " + token_val,
-					"appkey" : cur_key,
-					"appsecret" : cur_secret,
-					"custtype" : "P"
-				}
-				self.__api_token_list[cur_key] = {
-					"TOKEN_TYPE" : token_type,
-					"TOKEN_VAL" : token_val,
-					"TOKEN_DATETIME" : token_datetime.strftime("%Y-%m-%d %H:%M:%S"),
-					"TOKEN_HEADER" : token_header,
-				}
-
-		except: raise Exception("Fail to create access token for KoreaInvest Api")
-			
-		try:
-			file = open("./doc/last_token_info.dat", 'w')
-			file.write(self.__api_token_list.__str__().replace("'", "\""))
-			file.close()
-
-		except: Util.PrintErrorLog("Fail to create access token for KoreaInvest Api")
-
 	def __create_websocket_app(self) -> None:
 		try:
 			for ws_app in self.__ws_app_list:
@@ -286,13 +188,13 @@ class ApiKoreaInvestType:
 
 				
 				approval_key = rep_json["approval_key"]
-				ws_app = websocket.WebSocketApp(
+				ws_app = WebSocketApp(
 					url = self.__WS_BASE_URL,
 					on_message= self.__on_ws_recv_message,
 					on_open= self.__on_ws_open,
 					on_close= self.__on_ws_close,
 				)
-				ws_thread = threading.Thread(target=ws_app.run_forever)
+				ws_thread = Thread(name=f"KoreaInvest_WS_{approval_key}", target=ws_app.run_forever)
 
 				self.__ws_app_list.append({
 					"APPROVAL_KEY" : approval_key,
@@ -314,7 +216,8 @@ class ApiKoreaInvestType:
 					) or (
 					self.__ws_query_type == "EX" and 
 					val[1].find("NYSE") == -1 and
-					val[1].find("NASDAQ") == -1
+					val[1].find("NASDAQ") == -1 and
+					val[1].find("AMEX") == -1
 					): continue
 				
 				self.__ws_app_list[app_idx]["WS_QUERY_LIST"].append(val)
@@ -328,8 +231,307 @@ class ApiKoreaInvestType:
 			
 		except: raise Exception("Fail to create web socket approval key")
 
+	def __get_rest_api_limit(self) -> int:
+		return 20 * len(self.__api_key_list)
+
 	def __get_websocket_query_limit(self) -> int:
 		return 40 * len(self.__api_key_list)
+
+
+	def __get_kospi_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip", "./temp/kospi_code.zip")
+
+		kospi_zip = zipfile.ZipFile("./temp/kospi_code.zip")
+		kospi_zip.extractall("./temp")
+		kospi_zip.close()
+
+		part1_columns = ["단축코드", "표준코드", "한글명"]
+		part2_columns = ["그룹코드","시가총액규모","지수업종대분류","지수업종중분류","지수업종소분류","제조업","저유동성","지배구조지수종목","KOSPI200섹터업종","KOSPI100","KOSPI50","KRX","ETP","ELW발행","KRX100","KRX자동차","KRX반도체","KRX바이오","KRX은행","SPAC","KRX에너지화학","KRX철강","단기과열","KRX미디어통신","KRX건설","Non1","KRX증권","KRX선박","KRX섹터_보험","KRX섹터_운송","SRI","기준가","매매수량단위","시간외수량단위","거래정지","정리매매","관리종목","시장경고","경고예고","불성실공시","우회상장","락구분","액면변경","증자구분","증거금비율","신용가능","신용기간","전일거래량","액면가","상장일자","상장주수","자본금","결산월","공모가","우선주","공매도과열","이상급등","KRX300","KOSPI","매출액","영업이익","경상이익","당기순이익","ROE","기준년월","시가총액","그룹사코드","회사신용한도초과","담보대출가능","대주가능",]
+		field_specs = [2,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,5,5,1,1,1,2,1,1,1,2,2,2,3,1,3,12,12,8,15,21,2,7,1,1,1,1,1,9,9,9,5,9,8,9,3,1,1,1,]
+		offset = sum(field_specs) + 1
+
+		tmp_fil1 = "./temp/kospi_code_part1.tmp"
+		tmp_fil2 = "./temp/kospi_code_part2.tmp"
+		
+		wf1 = open(tmp_fil1, mode="w")
+		wf2 = open(tmp_fil2, mode="w")
+
+		with open("./temp/kospi_code.mst", mode="r", encoding="cp949") as f:
+			for row in f:
+				rf1 = row[0 : len(row) - offset]
+				rf1_1 = rf1[0:9].rstrip()
+				rf1_2 = rf1[9:21].rstrip()
+				rf1_3 = rf1[21:].strip()
+				wf1.write(rf1_1 + "," + rf1_2 + "," + rf1_3 + "\n")
+				rf2 = row[-offset:]
+				wf2.write(rf2)
+
+		wf1.close()
+		wf2.close()
+
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
+		df["단축코드"] = df["단축코드"].astype('str')
+		
+		files = glob.glob('./temp/*')
+		for f in files:
+			os.remove(f)
+
+		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
+		for i in range(len(ret)):
+			while len(ret[i]) < 6:
+				ret[i] = "0" + ret[i]
+
+		return ret
+		
+	def __get_kosdaq_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip", "./temp/kosdaq_code.zip")
+
+		kospi_zip = zipfile.ZipFile("./temp/kosdaq_code.zip")
+		kospi_zip.extractall("./temp")
+		kospi_zip.close()
+
+		part1_columns = ["단축코드", "표준코드", "한글명"]
+		part2_columns = ["그룹코드","시가총액 규모 구분 코드 유가","지수업종 대분류 코드","지수 업종 중분류 코드","지수업종 소분류 코드","벤처기업 여부","저유동성종목 여부","KRX 종목 여부","ETP 상품구분코드","KRX100 종목 여부","KRX 자동차 여부","KRX 반도체 여부","KRX 바이오 여부","KRX 은행 여부","기업인수목적회사여부","KRX 에너지 화학 여부","KRX 철강 여부","단기과열종목구분코드","KRX 미디어 통신 여부","KRX 건설 여부","투자주의환기종목여부","KRX 증권 구분","KRX 선박 구분","KRX섹터지수 보험여부","KRX섹터지수 운송여부","KOSDAQ150지수여부","주식 기준가","정규 시장 매매 수량 단위","시간외 시장 매매 수량 단위","거래정지 여부","정리매매 여부","관리 종목 여부","시장 경고 구분 코드","시장 경고위험 예고 여부","불성실 공시 여부","우회 상장 여부","락구분 코드","액면가 변경 구분 코드","증자 구분 코드","증거금 비율","신용주문 가능 여부","신용기간","전일 거래량","주식 액면가","주식 상장 일자","상장 주수","자본금","결산 월","공모 가격","우선주 구분 코드","공매도과열종목여부","이상급등종목여부","KRX300 종목 여부","매출액","영업이익","경상이익","단기순이익","ROE","기준년월","전일기준 시가총액","그룹사 코드","회사신용한도초과여부","담보대출가능여부","대주가능여부",]
+		field_specs = [2,1,4,4,4,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,9,5,5,1,1,1,2,1,1,1,2,2,2,3,1,3,12,12,8,15,21,2,7,1,1,1,1,9,9,9,5,9,8,9,3,1,1,1,]
+		offset = sum(field_specs) + 1
+
+		tmp_fil1 = "./temp/kosdaq_code_part1.tmp"
+		tmp_fil2 = "./temp/kosdaq_code_part2.tmp"
+		
+		wf1 = open(tmp_fil1, mode="w")
+		wf2 = open(tmp_fil2, mode="w")
+
+		with open("./temp/kosdaq_code.mst", mode="r", encoding="cp949") as f:
+			for row in f:
+				rf1 = row[0 : len(row) - offset]
+				rf1_1 = rf1[0:9].rstrip()
+				rf1_2 = rf1[9:21].rstrip()
+				rf1_3 = rf1[21:].strip()
+				wf1.write(rf1_1 + "," + rf1_2 + "," + rf1_3 + "\n")
+				rf2 = row[-offset:]
+				wf2.write(rf2)
+
+		wf1.close()
+		wf2.close()
+
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
+		df["단축코드"] = df["단축코드"].astype('str')
+		
+		files = glob.glob('./temp/*')
+		for f in files:
+			os.remove(f)
+
+		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
+		for i in range(len(ret)):
+			while len(ret[i]) < 6:
+				ret[i] = "0" + ret[i]
+
+		return ret
+		
+	def __get_konex_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/konex_code.mst.zip", "./temp/konex_code.zip")
+
+		kospi_zip = zipfile.ZipFile("./temp/konex_code.zip")
+		kospi_zip.extractall("./temp")
+		kospi_zip.close()
+
+		part1_columns = ["단축코드", "표준코드", "한글명"]
+		part2_columns = ["그룹코드","주식 기준가","정규 시장 매매 수량 단위","시간외 시장 매매 수량 단위","거래정지 여부","정리매매 여부","관리 종목 여부","시장 경고 구분 코드","시장 경고위험 예고 여부","불성실 공시 여부","우회 상장 여부","락구분 코드","액면가 변경 구분 코드","증자 구분 코드","증거금 비율","신용주문 가능 여부","신용기간","전일 거래량","주식 액면가","주식 상장 일자","상장 주수","자본금","결산 월","공모 가격","우선주 구분 코드","공매도과열종목여부","이상급등종목여부","KRX300 종목 여부","매출액","영업이익","경상이익","단기순이익","ROE","기준년월","전일기준 시가총액","회사신용한도초과여부","담보대출가능여부","대주가능여부",]
+		field_specs = [2,9,5,5,1,1,1,2,1,1,1,2,2,2,3,1,3,12,12,8,15,21,2,7,1,1,1,1,9,9,9,5,9,8,9,1,1,1,]
+		offset = sum(field_specs) + 1
+
+		tmp_fil1 = "./temp/konex_code_part1.tmp"
+		tmp_fil2 = "./temp/konex_code_part2.tmp"
+		
+		wf1 = open("./temp/konex_code_part1.tmp", mode="w")
+		wf2 = open("./temp/konex_code_part2.tmp", mode="w")
+
+		with open("./temp/konex_code.mst", mode="r", encoding="cp949") as f:
+			for row in f:
+				rf1 = row[0 : len(row) - offset]
+				rf1_1 = rf1[0:9].rstrip()
+				rf1_2 = rf1[9:21].rstrip()
+				rf1_3 = rf1[21:].strip()
+				wf1.write(rf1_1 + "," + rf1_2 + "," + rf1_3 + "\n")
+				rf2 = row[-offset:]
+				wf2.write(rf2)
+
+		wf1.close()
+		wf2.close()
+
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
+		df["단축코드"] = df["단축코드"].astype('str')
+
+		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
+		for i in range(len(ret)):
+			while len(ret[i]) < 6:
+				ret[i] = "0" + ret[i]
+
+		return ret
+
+
+	def __get_nyse_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/nysmst.cod.zip", "./temp/nysmst.cod.zip")
+
+		overseas_zip = zipfile.ZipFile(f'./temp/nysmst.cod.zip')
+		overseas_zip.extractall("./temp")
+		overseas_zip.close()
+
+		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
+		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
+		df = pd.read_table("./temp/NYSMST.COD",sep='\t',encoding='cp949')
+		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+
+		files = glob.glob('./temp/*')
+		for f in files:
+			os.remove(f)
+
+		return df[df["Security type"] == 2]["Symbol"].tolist()
+	
+	def __get_nasdaq_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/nasmst.cod.zip", "./temp/nasmst.cod.zip")
+
+		overseas_zip = zipfile.ZipFile(f'./temp/nasmst.cod.zip')
+		overseas_zip.extractall("./temp")
+		overseas_zip.close()
+
+		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
+		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
+		df = pd.read_table("./temp/NASMST.COD",sep='\t',encoding='cp949')
+		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+
+		files = glob.glob('./temp/*')
+		for f in files:
+			os.remove(f)
+
+		return df[df["Security type"] == 2]["Symbol"].tolist()
+	
+	def __get_amex_stock_list(self) -> list:
+		ssl._create_default_https_context = ssl._create_unverified_context
+		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/amsmst.cod.zip", "./temp/amsmst.cod.zip")
+
+		overseas_zip = zipfile.ZipFile('./temp/amsmst.cod.zip')
+		overseas_zip.extractall("./temp")
+		overseas_zip.close()
+
+		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
+		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
+		df = pd.read_table("./temp/AMSMST.COD",sep='\t',encoding='cp949')
+		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+
+		files = glob.glob('./temp/*')
+		for f in files:
+			os.remove(f)
+
+		return df[df["Security type"] == 2]["Symbol"].tolist()
+	
+
+	def __update_token(self) -> None:
+		try:
+			file = open("./doc/last_token_info.dat", 'r')
+			file_all_string = file.read()
+			file.close()
+
+			file_data = json.loads(file_all_string)
+
+			for key, value in file_data.items():
+				for api_key in self.__api_key_list:
+					if key != api_key["KEY"]: continue
+
+					try:
+						token_type = value["TOKEN_TYPE"]
+						token_val = value["TOKEN_VAL"]
+						token_datetime = DateTime.strptime(value["TOKEN_DATETIME"], "%Y-%m-%d %H:%M:%S")
+						token_header = {
+							"content-type" : "application/json; charset=utf-8",
+							"authorization" : token_type + " " + token_val,
+							"appkey" : api_key["KEY"],
+							"appsecret" : api_key["SECRET"],
+							"custtype" : "P"
+						}
+						remain_sec = (token_datetime - DateTime.now()).seconds
+						
+						if remain_sec > 86220:
+							api_key["TOKEN_TYPE"] = token_type
+							api_key["TOKEN_VAL"] = token_val
+							api_key["TOKEN_DATETIME"] = token_datetime
+							api_key["TOKEN_HEADER"] = token_header
+						elif remain_sec > 43200:
+							api_url = "/oauth2/revokeP"
+							api_body = {
+								"grant_type" : "client_credentials",
+								"appkey" : api_key["KEY"],
+								"appsecret" : api_key["SECRET"],
+								"token" : token_val
+							}
+							response = requests.post (
+								url = self.__API_BASE_URL + api_url,
+								data = json.dumps(api_body),
+							)
+						break
+					except: pass
+
+			os.remove("./doc/last_token_info.dat")
+
+		except: pass
+
+		try:
+			for api_key in self.__api_key_list:
+				if "TOKEN_VAL" in api_key: continue
+				
+				api_url = "/oauth2/tokenP"
+				api_body = {
+					"grant_type" : "client_credentials",
+					"appkey" : api_key["KEY"],
+					"appsecret" : api_key["SECRET"],
+				}
+				response = requests.post (
+					url = self.__API_BASE_URL + api_url,
+					data = json.dumps(api_body),
+				)
+
+				rep_json = json.loads(response.text)
+
+				api_key["TOKEN_TYPE"] = rep_json["token_type"]
+				api_key["TOKEN_VAL"] = rep_json["access_token"]
+				api_key["TOKEN_DATETIME"] = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
+				api_key["TOKEN_HEADER"] = {
+					"content-type" : "application/json; charset=utf-8",
+					"authorization" : api_key["TOKEN_TYPE"] + " " + api_key["TOKEN_VAL"],
+					"appkey" : api_key["KEY"],
+					"appsecret" : api_key["SECRET"],
+					"custtype" : "P"
+				}
+
+		except: raise Exception("Fail to create access token for KoreaInvest Api")
+			
+		try:
+			file_data = {}
+			for api_key in self.__api_key_list:
+				if "TOKEN_VAL" not in api_key: continue
+
+				file_data[api_key["KEY"]] = {
+					"TOKEN_TYPE" : api_key["TOKEN_TYPE"],
+					"TOKEN_VAL" : api_key["TOKEN_VAL"],
+					"TOKEN_DATETIME" : api_key["TOKEN_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
+				}
+
+			file = open("./doc/last_token_info.dat", 'w')
+			file.write(file_data.__str__().replace("'", "\""))
+			file.close()
+
+		except: Util.PrintErrorLog("Fail to create access token for KoreaInvest Api")
 
 
 	##########################################################################
@@ -337,7 +539,7 @@ class ApiKoreaInvestType:
 
 	def __start_dequeue_sql_query(self) -> None:
 		self.__sql_is_stop = False
-		self.__sql_thread = threading.Thread(target=self.__func_dequeue_sql_query)
+		self.__sql_thread = Thread(name="KoreaInvest_Dequeue",target=self.__func_dequeue_sql_query)
 		self.__sql_thread.start()
 		
 	def __stop_dequeue_sql_query(self) -> None:
@@ -349,14 +551,16 @@ class ApiKoreaInvestType:
 			self.__sql_query_connection.ping(reconnect=True)
 			cursor = self.__sql_query_connection.cursor()
 			while self.__sql_query_queue.empty() == False:
-				cursor.execute(self.__sql_query_queue.get())
+				try: cursor.execute(self.__sql_query_queue.get())
+				except: pass
 
 			time.sleep(0.2)
 		
 		self.__sql_query_connection.ping(reconnect=True)
 		cursor = self.__sql_query_connection.cursor()
 		while self.__sql_query_queue.empty() == False:
-			cursor.execute(self.__sql_query_queue.get())
+			try: cursor.execute(self.__sql_query_queue.get())
+			except: pass
 
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
@@ -385,22 +589,22 @@ class ApiKoreaInvestType:
 			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
-		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS TickerCandle.stock_ex_" + table_name + " ("
-			+ "execution_datetime DATETIME NOT NULL,"
-			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "PRIMARY KEY (execution_datetime) USING BTREE"
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
-		)
+		# self.__sql_query_queue.put(
+		# 	"CREATE TABLE IF NOT EXISTS TickerCandle.stock_ex_" + table_name + " ("
+		# 	+ "execution_datetime DATETIME NOT NULL,"
+		# 	+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+		# 	+ "PRIMARY KEY (execution_datetime) USING BTREE"
+		# 	+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
+		# )
 		self.__sql_query_queue.put(
 			"INSERT INTO TickerRaw.stock_ex_" + table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
@@ -410,30 +614,38 @@ class ApiKoreaInvestType:
 			+ "'" + bid_volume_str + "' "
 			+ ")"
 		)
+		# self.__sql_query_queue.put(
+		# 	"INSERT INTO TickerCandle.stock_ex_" + table_name + " VALUES ("
+		# 	+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
+		# 	+ "'" + price_str + "',"
+		# 	+ "'" + price_str + "',"
+		# 	+ "'" + price_str + "',"
+		# 	+ "'" + price_str + "',"
+		# 	+ "'" + non_volume_str + "',"
+		# 	+ "'" + ask_volume_str + "',"
+		# 	+ "'" + bid_volume_str + "',"
+		# 	+ "'" + non_amount_str + "',"
+		# 	+ "'" + ask_amount_str + "',"
+		# 	+ "'" + bid_amount_str + "' "
+		# 	+ ") ON DUPLICATE KEY UPDATE "
+		# 	+ "execution_close='" + price_str + "',"
+		# 	+ "execution_min=LEAST(execution_min,'" + price_str + "'),"
+		# 	+ "execution_max=GREATEST(execution_max,'" + price_str + "'),"
+		# 	+ "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
+		# 	+ "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
+		# 	+ "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
+		# 	+ "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
+		# 	+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
+		# 	+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
+		# )
 		self.__sql_query_queue.put(
-			"INSERT INTO TickerCandle.stock_ex_" + table_name + " VALUES ("
+			"exec TickerCandle.add_execution_result "
 			+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
-			+ "'" + price_str + "',"
-			+ "'" + price_str + "',"
-			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
 			+ "'" + non_volume_str + "',"
 			+ "'" + ask_volume_str + "',"
-			+ "'" + bid_volume_str + "',"
-			+ "'" + non_amount_str + "',"
-			+ "'" + ask_amount_str + "',"
-			+ "'" + bid_amount_str + "' "
-			+ ") ON DUPLICATE KEY UPDATE "
-			+ "execution_close='" + price_str + "',"
-			+ "execution_min=LEAST(execution_min,'" + price_str + "'),"
-			+ "execution_max=GREATEST(execution_max,'" + price_str + "'),"
-			+ "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
-			+ "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
-			+ "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
-			+ "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
-			+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
-			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
-		)
+			+ "'" + bid_volume_str + "'"
+			)
 
 	def __update_stock_orderbook_table(self, stock_code:str, dt:DateTime, data) -> None:
 		# TODO
@@ -624,7 +836,7 @@ class ApiKoreaInvestType:
 		print("매도총잔략대비      [%s]" % (recvvalue[10]))
 
 
-	def __on_ws_recv_message(self, ws:websocket.WebSocketApp, msg:str) -> None:
+	def __on_ws_recv_message(self, ws:WebSocketApp, msg:str) -> None:
 		try:
 			if msg[0] == '0':
 				# 수신데이터가 실데이터 이전은 '|'로 나눠 있음
@@ -635,10 +847,14 @@ class ApiKoreaInvestType:
 				# HDFSCNT0 : 해외 주식 체결
 				# H0STASP0 : 국내 주식 호가
 				# HDFSASP0 : 해외 주식 호가
-				if trid0 == "H0STCNT0": self.__on_recv_kr_stock_execution(int(recvstr[2]), recvstr[3])
-				elif trid0 == "HDFSCNT0": self.__on_recv_ex_stock_execution(int(recvstr[2]), recvstr[3])
-				elif trid0 == "H0STASP0": self.__on_recv_kr_stock_orderbook(recvstr[3])
-				elif trid0 == "HDFSASP0": self.__on_recv_ex_stock_orderbook(recvstr[3])
+				if trid0 == "H0STCNT0":
+					Thread(name="KoreaInvest_KR_Execution", target=self.__on_recv_kr_stock_execution(int(recvstr[2]), recvstr[3])).start()
+				elif trid0 == "HDFSCNT0":
+					Thread(name="KoreaInvest_EX_Execution", target=self.__on_recv_ex_stock_execution(int(recvstr[2]), recvstr[3])).start()
+				elif trid0 == "H0STASP0":
+					Thread(name="KoreaInvest_KR_Orderbook", target=self.__on_recv_kr_stock_orderbook(recvstr[3])).start()
+				elif trid0 == "HDFSASP0":
+					Thread(name="KoreaInvest_EX_Orderbook", target=self.__on_recv_ex_stock_orderbook(recvstr[3])).start()
 
 			else:
 				msg_json = json.loads(msg)
@@ -649,15 +865,13 @@ class ApiKoreaInvestType:
 				else:
 					rt_cd = msg_json["body"]["rt_cd"]
 
-					if rt_cd == '0':
-						Util.PrintNormalLog("Success msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
-					else:
+					if rt_cd != '0':
 						Util.PrintErrorLog("Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
 
 		except Exception as e:
 			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
-	def __on_ws_open(self, ws:websocket.WebSocketApp) -> None:
+	def __on_ws_open(self, ws:WebSocketApp) -> None:
 		for ws_app in self.__ws_app_list:
 			if ws_app["WS_APP"] != ws: continue
 			ws_app["WS_IS_OPENED"] = True
@@ -688,7 +902,7 @@ class ApiKoreaInvestType:
 			break
 		Util.PrintNormalLog("Opened korea invest websocket")
 
-	def __on_ws_close(self, ws:websocket.WebSocketApp, close_code, close_msg) -> None:
+	def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
 		for ws_app in self.__ws_app_list:
 			if ws_app["WS_APP"] != ws: continue
 			ws_app["WS_IS_OPENED"] = False
@@ -887,7 +1101,8 @@ class ApiKoreaInvestType:
 			if self.__ws_query_list_buf.__contains__("EX_" + stock_code):
 				stock_market = self.__ws_query_list_buf["EX_" + stock_code][1]
 				if (stock_market == "NYSE" or
-					stock_market == "NASDAQ"):
+					stock_market == "NASDAQ" or
+					stock_market == "AMEX"):
 					return GetUsQueryCount(self.__ws_query_list_buf)
 				else:
 					return GetKrQueryCount(self.__ws_query_list_buf)
@@ -912,6 +1127,10 @@ class ApiKoreaInvestType:
 				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSCNT0"
 				api_stock_code = "DNAS" + stock_code
+			elif stock_market == "AMEX":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
+				api_code = "HDFSCNT0"
+				api_stock_code = "DAMS" + stock_code
 			else:
 				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "H0STCNT0"
@@ -920,7 +1139,8 @@ class ApiKoreaInvestType:
 			self.__ws_query_list_buf["EX_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
 
 			if (stock_market == "NYSE" or
-				stock_market == "NASDAQ"):
+				stock_market == "NASDAQ" or
+				stock_market == "AMEX"):
 				return GetUsQueryCount(self.__ws_query_list_buf)
 			else:
 				return GetKrQueryCount(self.__ws_query_list_buf)
@@ -934,7 +1154,8 @@ class ApiKoreaInvestType:
 			if self.__ws_query_list_buf.__contains__("OB_" + stock_code):
 				stock_market = self.__ws_query_list_buf["OB_" + stock_code][1]
 				if (stock_market == "NYSE" or
-					stock_market == "NASDAQ"):
+					stock_market == "NASDAQ" or
+					stock_market == "AMEX"):
 					return GetUsQueryCount(self.__ws_query_list_buf)
 				else:
 					return GetKrQueryCount(self.__ws_query_list_buf)
@@ -959,6 +1180,10 @@ class ApiKoreaInvestType:
 				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "HDFSASP0"
 				api_stock_code = "DNAS" + stock_code
+			elif stock_market == "AMEX":
+				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
+				api_code = "HDFSASP0"
+				api_stock_code = "DAMS" + stock_code
 			else:
 				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
 				api_code = "H0STASP0"
@@ -967,7 +1192,8 @@ class ApiKoreaInvestType:
 			self.__ws_query_list_buf["OB_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
 
 			if (stock_market == "NYSE" or
-				stock_market == "NASDAQ"):
+				stock_market == "NASDAQ" or
+				stock_market == "AMEX"):
 				return GetUsQueryCount(self.__ws_query_list_buf)
 			else:
 				return GetKrQueryCount(self.__ws_query_list_buf)
@@ -1000,23 +1226,233 @@ class ApiKoreaInvestType:
 	def GetCurrentCollectingType(self) -> str:
 		return self.__ws_query_type
 
-	def StartCollecting(self, query_type:str) -> bool:
+	def StartCollecting(self, query_type:str) -> None:
 		try:
 			self.__ws_query_type = query_type
 			self.__sync_last_ws_query_table()
-			self.__create_token()
 			self.__create_websocket_app()
-			
-			return True
 
 		except Exception as e:
 			Util.PrintErrorLog(e.__str__())
-			return False
 
 	def StopCollecting(self) -> None:
 		for ws_app in self.__ws_app_list:
-			ws_app["WS_APP"].close()
-			ws_app["WS_THREAD"].join()
+			if ws_app["WS_APP"] != None:
+				ws_app["WS_APP"].close()
+				ws_app["WS_THREAD"].join()
 	
+
+	def UpdateStockInfo(self) -> None:
+		try:
+			stock_code_list = {
+				"KOSPI" : self.__get_kospi_stock_list(),
+				"KOSDAQ" : self.__get_kosdaq_stock_list(),
+				"KONEX" : self.__get_konex_stock_list(),
+				"NYSE" : self.__get_nyse_stock_list(),
+				"NASDAQ" : self.__get_nasdaq_stock_list(),
+				"AMEX" : self.__get_amex_stock_list(),
+			}
+
+			self.__update_token()
+			key_idx = 0
+			kr_type = ["KOSPI", "KOSDAQ", "KONEX"]
+			ex_type = ["NYSE", "NASDAQ", "AMEX"]
+			
+			sleep_time = 1.0 / (self.__get_rest_api_limit() + 4)
+			for stock_market in kr_type:
+				for stock_code in stock_code_list[stock_market]:
+					if stock_code == "nan": continue
+					start_time = time.time()
+
+					try:
+						api_url = "/uapi/domestic-stock/v1/quotations/search-stock-info"
+						api_header = self.__api_key_list[key_idx]["TOKEN_HEADER"].copy()
+						api_header["tr_id"] = "CTPF1002R"
+						api_para = {
+							"PRDT_TYPE_CD" : "300",
+							"PDNO" : stock_code,
+						}
+					
+						key_idx += 1
+						if key_idx >= len(self.__api_key_list):
+							key_idx = 0
+
+						response = requests.get (
+							url = self.__API_BASE_URL + api_url,
+							headers= api_header,
+							params= api_para,
+						)
+
+						rep_json = json.loads(response.text)
+						if int(rep_json["rt_cd"]) != 0: raise
+
+						rep_stock_info = rep_json["output"]
+
+						stock_name_kr = rep_stock_info["prdt_abrv_name"].replace("'", " ")
+						stock_name_en = rep_stock_info["prdt_eng_abrv_name"].replace("'", " ")
+						stock_price = rep_stock_info["thdt_clpr"]
+						stock_count = rep_stock_info["lstg_stqt"]
+						if stock_price == "": stock_price = "0"
+						if stock_count == "": stock_count = "0"
+						stock_cap = str(float(stock_count) * float(stock_price))
+
+						self.__sql_common_connection.ping(reconnect=True)
+						cursor = self.__sql_common_connection.cursor()
+						cursor.execute(
+							"INSERT INTO stock_info ("
+							+ "stock_code, stock_name_kr, stock_name_en, stock_market, stock_count, stock_price, stock_capitalization"
+							+ ") VALUES ("
+							+ f"'{stock_code}',"
+							+ f"'{stock_name_kr}',"
+							+ f"'{stock_name_en}',"
+							+ f"'{stock_market}',"
+							+ f"'{stock_count}',"
+							+ f"'{stock_price}',"
+							+ f"'{stock_cap}' "
+							+ ") ON DUPLICATE KEY UPDATE "
+							+ f"stock_name_kr='{stock_name_kr}',"
+							+ f"stock_name_en='{stock_name_en}',"
+							+ f"stock_market='{stock_market}',"
+							+ f"stock_count='{stock_count}',"
+							+ f"stock_price='{stock_price}',"
+							+ f"stock_capitalization='{stock_cap}'"
+						)
+
+					except Exception as e:
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code,e.__str__()})
+
+					excution_time = time.time() - start_time
+					if excution_time >= sleep_time: continue
+
+					time.sleep(sleep_time - excution_time)
+				
+			sleep_time = 2.0 / (self.__get_rest_api_limit() + 2)	
+			for stock_market in ex_type:
+				for stock_code in stock_code_list[stock_market]:
+					if stock_code == "nan": continue
+					start_time = time.time()
+
+					try:
+						api_url = "/uapi/overseas-price/v1/quotations/search-info"
+						api_header = self.__api_key_list[key_idx]["TOKEN_HEADER"].copy()
+						api_header["tr_id"] = "CTPF1702R"
+						if stock_market == "NASDAQ":
+							api_para = {
+								"PRDT_TYPE_CD" : "512",
+								"PDNO" : stock_code,
+							}
+						elif stock_market == "NYSE":
+							api_para = {
+								"PRDT_TYPE_CD" : "513",
+								"PDNO" : stock_code,
+							}
+						else:
+							api_para = {
+								"PRDT_TYPE_CD" : "529",
+								"PDNO" : stock_code,
+							}
+					
+						key_idx += 1
+						if key_idx >= len(self.__api_key_list):
+							key_idx = 0
+
+						response = requests.get (
+							url = self.__API_BASE_URL + api_url,
+							headers= api_header,
+							params= api_para,
+						)
+
+						rep_json = json.loads(response.text)
+						if int(rep_json["rt_cd"]) != 0: raise
+
+						rep_stock_info1 = rep_json["output"]
+
+
+						api_url = "/uapi/overseas-price/v1/quotations/price-detail"
+						api_header = self.__api_key_list[key_idx]["TOKEN_HEADER"].copy()
+						api_header["tr_id"] = "HHDFS76200200"
+						if stock_market == "NASDAQ":
+							api_para = {
+								"AUTH" : "",
+								"EXCD" : "NAS",
+								"SYMB" : stock_code,
+							}
+						elif stock_market == "NYSE":
+							api_para = {
+								"AUTH" : "",
+								"EXCD" : "NYS",
+								"SYMB" : stock_code,
+							}
+						else:
+							api_para = {
+								"AUTH" : "",
+								"EXCD" : "AMS",
+								"SYMB" : stock_code,
+							}
+					
+						key_idx += 1
+						if key_idx >= len(self.__api_key_list):
+							key_idx = 0
+
+						response = requests.get (
+							url = self.__API_BASE_URL + api_url,
+							headers= api_header,
+							params= api_para,
+						)
+
+						rep_json = json.loads(response.text)
+						if int(rep_json["rt_cd"]) != 0: raise
+
+						rep_stock_info2 = rep_json["output"]
+
+
+						stock_name_kr = rep_stock_info1["prdt_name"].replace("'", " ")
+						stock_name_en = rep_stock_info1["prdt_eng_name"].replace("'", " ")
+						stock_price = rep_stock_info2["base"]
+						stock_count = rep_stock_info1["lstg_stck_num"]
+						if stock_price == "": stock_price = "0"
+						if stock_count == "": stock_count = "0"
+						stock_cap = str(float(stock_count) * float(stock_price))
+
+						self.__sql_common_connection.ping(reconnect=True)
+						cursor = self.__sql_common_connection.cursor()
+						cursor.execute(
+							"INSERT INTO stock_info ("
+							+ "stock_code, stock_name_kr, stock_name_en, stock_market, stock_count, stock_price, stock_capitalization"
+							+ ") VALUES ("
+							+ f"'{stock_code}',"
+							+ f"'{stock_name_kr}',"
+							+ f"'{stock_name_en}',"
+							+ f"'{stock_market}',"
+							+ f"'{stock_count}',"
+							+ f"'{stock_price}',"
+							+ f"'{stock_cap}' "
+							+ ") ON DUPLICATE KEY UPDATE "
+							+ f"stock_name_kr='{stock_name_kr}',"
+							+ f"stock_name_en='{stock_name_en}',"
+							+ f"stock_market='{stock_market}',"
+							+ f"stock_count='{stock_count}',"
+							+ f"stock_price='{stock_price}',"
+							+ f"stock_capitalization='{stock_cap}'"
+						)
+
+					except Exception as e:
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code,e.__str__()})
+
+					excution_time = time.time() - start_time
+					if excution_time >= sleep_time: continue
+
+					time.sleep(sleep_time - excution_time)
+
+			Util.PrintNormalLog("Success to update stock info")
+
+		except Exception as e:
+			Util.PrintErrorLog("Fail to update stock info : " + e.__str__())
+
+
+		
+
+
+
 
 

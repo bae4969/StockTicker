@@ -51,12 +51,3 @@ def TogglePrintLog() -> None:
 	is_print_debug_log = not is_print_debug_log
 
 
-def GetCurrnetMarketOpened() -> str:
-	kr_market_from = DateTime.now().replace(hour=8, minute=0, second=0)
-	kr_market_to = DateTime.now().replace(hour=15, minute=30, second=0)
-	
-	if (kr_market_from < DateTime.now() < kr_market_to):
-		return "KR"
-	else:
-		return "EX"
-

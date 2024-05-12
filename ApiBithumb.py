@@ -179,11 +179,9 @@ class ApiBithumbType:
 
 
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
-		table_name = (
-			coin_code.replace("/", "_")
-			+ "_"
-			+ dt.strftime("%Y%V")
-		)
+		database_name = "Z_Coin" + coin_code.replace("/", "_")
+		raw_table_name = database_name + ".Raw" + dt.strftime("%Y%V")
+		candle_table_name = database_name + ".Candle" + dt.strftime("%Y%V")
 
 		datetime_00_min = dt
 		datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -196,7 +194,11 @@ class ApiBithumbType:
 		bid_amount_str = str(price * bid_volume)
 		
 		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS TickerRaw.coin_ex_" + table_name + " ("
+			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
+			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"
+		)
+		self.__sql_query_queue.put(
+			"CREATE TABLE IF NOT EXISTS " + raw_table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
 			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -205,7 +207,7 @@ class ApiBithumbType:
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
 		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS TickerCandle.coin_ex_" + table_name + " ("
+			"CREATE TABLE IF NOT EXISTS " + candle_table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
 			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -221,7 +223,7 @@ class ApiBithumbType:
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
 		)
 		self.__sql_query_queue.put(
-			"INSERT INTO TickerRaw.coin_ex_" + table_name + " VALUES ("
+			"INSERT INTO " + raw_table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + non_volume_str + "',"
@@ -230,7 +232,7 @@ class ApiBithumbType:
 			+ ")"
 		)
 		self.__sql_query_queue.put(
-			"INSERT INTO TickerCandle.coin_ex_" + table_name + " VALUES ("
+			"INSERT INTO " + candle_table_name + " VALUES ("
 			+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"

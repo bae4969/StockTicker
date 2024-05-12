@@ -564,11 +564,9 @@ class ApiKoreaInvestType:
 
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
-		table_name = (
-			stock_code.replace("/", "_")
-			+ "_"
-			+ dt.strftime("%Y%V")
-		)
+		database_name = "Z_Stock" + stock_code.replace("/", "_")
+		raw_table_name = database_name + ".Raw" + dt.strftime("%Y%V")
+		candle_table_name = database_name + ".Candle" + dt.strftime("%Y%V")
 
 		datetime_00_min = dt
 		datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -581,7 +579,11 @@ class ApiKoreaInvestType:
 		bid_amount_str = str(price * bid_volume)
 		
 		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS TickerRaw.stock_ex_" + table_name + " ("
+			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
+			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"
+		)
+		self.__sql_query_queue.put(
+			"CREATE TABLE IF NOT EXISTS " + raw_table_name + " ("
 			+ "execution_datetime DATETIME NOT NULL,"
 			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -589,24 +591,24 @@ class ApiKoreaInvestType:
 			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
 			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
 		)
-		# self.__sql_query_queue.put(
-		# 	"CREATE TABLE IF NOT EXISTS TickerCandle.stock_ex_" + table_name + " ("
-		# 	+ "execution_datetime DATETIME NOT NULL,"
-		# 	+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-		# 	+ "PRIMARY KEY (execution_datetime) USING BTREE"
-		# 	+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
-		# )
 		self.__sql_query_queue.put(
-			"INSERT INTO TickerRaw.stock_ex_" + table_name + " VALUES ("
+			"CREATE TABLE IF NOT EXISTS " + candle_table_name + " ("
+			+ "execution_datetime DATETIME NOT NULL,"
+			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+			+ "PRIMARY KEY (execution_datetime) USING BTREE"
+			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
+		)
+		self.__sql_query_queue.put(
+			"INSERT INTO " + raw_table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
 			+ "'" + price_str + "',"
 			+ "'" + non_volume_str + "',"
@@ -614,38 +616,30 @@ class ApiKoreaInvestType:
 			+ "'" + bid_volume_str + "' "
 			+ ")"
 		)
-		# self.__sql_query_queue.put(
-		# 	"INSERT INTO TickerCandle.stock_ex_" + table_name + " VALUES ("
-		# 	+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
-		# 	+ "'" + price_str + "',"
-		# 	+ "'" + price_str + "',"
-		# 	+ "'" + price_str + "',"
-		# 	+ "'" + price_str + "',"
-		# 	+ "'" + non_volume_str + "',"
-		# 	+ "'" + ask_volume_str + "',"
-		# 	+ "'" + bid_volume_str + "',"
-		# 	+ "'" + non_amount_str + "',"
-		# 	+ "'" + ask_amount_str + "',"
-		# 	+ "'" + bid_amount_str + "' "
-		# 	+ ") ON DUPLICATE KEY UPDATE "
-		# 	+ "execution_close='" + price_str + "',"
-		# 	+ "execution_min=LEAST(execution_min,'" + price_str + "'),"
-		# 	+ "execution_max=GREATEST(execution_max,'" + price_str + "'),"
-		# 	+ "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
-		# 	+ "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
-		# 	+ "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
-		# 	+ "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
-		# 	+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
-		# 	+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
-		# )
 		self.__sql_query_queue.put(
-			"exec TickerCandle.add_execution_result "
+			"INSERT INTO " + candle_table_name + " VALUES ("
 			+ "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
+			+ "'" + price_str + "',"
+			+ "'" + price_str + "',"
+			+ "'" + price_str + "',"
 			+ "'" + price_str + "',"
 			+ "'" + non_volume_str + "',"
 			+ "'" + ask_volume_str + "',"
-			+ "'" + bid_volume_str + "'"
-			)
+			+ "'" + bid_volume_str + "',"
+			+ "'" + non_amount_str + "',"
+			+ "'" + ask_amount_str + "',"
+			+ "'" + bid_amount_str + "' "
+			+ ") ON DUPLICATE KEY UPDATE "
+			+ "execution_close='" + price_str + "',"
+			+ "execution_min=LEAST(execution_min,'" + price_str + "'),"
+			+ "execution_max=GREATEST(execution_max,'" + price_str + "'),"
+			+ "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
+			+ "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
+			+ "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
+			+ "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
+			+ "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
+			+ "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
+		)
 
 	def __update_stock_orderbook_table(self, stock_code:str, dt:DateTime, data) -> None:
 		# TODO

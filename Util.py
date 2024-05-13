@@ -1,21 +1,18 @@
 from datetime import datetime as DateTime
 import inspect
-import threading
-
-
-is_print_debug_log = True
-print_log_lock = threading.Lock()
+import logging
 
 
 def PrintNormalLog(log:str) -> None:
-	if is_print_debug_log == False: return
-
+	cur_datetime = DateTime.now()
+	log_filename = "./log/" + cur_datetime.strftime("%Y%V") + ".log"
+	logging.basicConfig(filename=log_filename, level=logging.INFO)
+	
 	filepath = inspect.stack()[1][1]
 	filename = filepath[filepath.rfind("/") + 1:]
 
-	print_log_lock.acquire()
-	print(
-		DateTime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+	logging.info(
+		cur_datetime.strftime("%Y-%m-%d %H:%M:%S.%f")
 		+ " |N| "
 		+ log
 		+ "\t("
@@ -24,18 +21,19 @@ def PrintNormalLog(log:str) -> None:
 		+ filename
 		+ ":"
 		+ str(inspect.stack()[1][2])
-		+")")
-	print_log_lock.release()
+		+")"
+	)
 
 def PrintErrorLog(log:str) -> None:
-	if is_print_debug_log == False: return
+	cur_datetime = DateTime.now()
+	log_filename = "./log/" + cur_datetime.strftime("%Y%V") + ".log"
+	logging.basicConfig(filename=log_filename, level=logging.INFO)
 
 	filepath = inspect.stack()[1][1]
 	filename = filepath[filepath.rfind("/") + 1:]
 	
-	print_log_lock.acquire()
-	print(
-		DateTime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+	logging.error(
+		cur_datetime.strftime("%Y-%m-%d %H:%M:%S.%f")
 		+ " |E| "
 		+ log
 		+ "\t("
@@ -45,9 +43,5 @@ def PrintErrorLog(log:str) -> None:
 		+ ":"
 		+ str(inspect.stack()[1][2])
 		+")")
-	print_log_lock.release()
 	
-def TogglePrintLog() -> None:
-	is_print_debug_log = not is_print_debug_log
-
 

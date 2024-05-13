@@ -48,7 +48,7 @@ class ApiKoreaInvestType:
 	__WS_BASE_URL:str = "ws://ops.koreainvestment.com:21000"
 	__ws_app_list:list = []		# APPROVAL_KEY, WS_APP, WS_THREAD, WS_IS_OPENED, WS_QUERY_LIST
 
-	__ws_query_type:str = "KR"
+	__ws_query_type:str = ""
 	__ws_query_list_buf:dict = {}
 	__ws_query_list_cur:dict = {}
 	__ws_ex_excution_last_volume:dict = {}
@@ -577,7 +577,7 @@ class ApiKoreaInvestType:
 		non_amount_str = str(price * non_volume)
 		ask_amount_str = str(price * ask_volume)
 		bid_amount_str = str(price * bid_volume)
-		
+	
 		self.__sql_query_queue.put(
 			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
 			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"
@@ -1211,6 +1211,8 @@ class ApiKoreaInvestType:
 
 
 	def IsCollecting(self) -> bool:
+		if len(self.__ws_app_list) == 0:
+			return False
 		for ws_app in self.__ws_app_list:
 			if ws_app["WS_IS_OPENED"] == False:
 				return False

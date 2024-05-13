@@ -33,7 +33,7 @@ while True:
     try:
         kr_min_datetime = DateTime.now().replace(hour=8, minute=0, second=0)
         kr_max_datetime = DateTime.now().replace(hour=15, minute=30, second=0)
-        if kr_min_datetime < DateTime.now() < kr_min_datetime:
+        if kr_min_datetime < DateTime.now() < kr_max_datetime:
             target_market = "KR"
         else:
             target_market = "EX"
@@ -50,8 +50,8 @@ while True:
             Thread(name="Bithumb_Start_Collector", target=bh.StartCollecting).start()
 
         if ki.IsCollecting() == False or target_market != ki.GetCurrentCollectingType():
-           ki.StopCollecting()
-           Thread(name="KoreaInvest_Start_Collector", target=ki.StartCollecting, args=(target_market,)).start()
+            ki.StopCollecting()
+            Thread(name="KoreaInvest_Start_Collector", target=ki.StartCollecting(target_market)).start()
 
         time.sleep(10)
     except:

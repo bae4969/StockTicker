@@ -1250,15 +1250,15 @@ class ApiKoreaInvestType:
 				"KOSPI" : self.__get_kospi_stock_list(),
 				"KOSDAQ" : self.__get_kosdaq_stock_list(),
 				"KONEX" : self.__get_konex_stock_list(),
-				"NYSE" : self.__get_nyse_stock_list(),
 				"NASDAQ" : self.__get_nasdaq_stock_list(),
+				"NYSE" : self.__get_nyse_stock_list(),
 				"AMEX" : self.__get_amex_stock_list(),
 			}
 
 			self.__update_token()
 			key_idx = 0
 			kr_type = ["KOSPI", "KOSDAQ", "KONEX"]
-			ex_type = ["NYSE", "NASDAQ", "AMEX"]
+			ex_type = ["NASDAQ", "NYSE", "AMEX"]
 			
 			sleep_time = 1.0 / (self.__get_rest_api_limit() + 4)
 			for stock_market in kr_type:
@@ -1286,7 +1286,7 @@ class ApiKoreaInvestType:
 						)
 
 						rep_json = json.loads(response.text)
-						if int(rep_json["rt_cd"]) != 0: raise
+						if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code")
 
 						rep_stock_info = rep_json["output"]
 
@@ -1321,7 +1321,7 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code, e.__str__()})
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue
@@ -1364,7 +1364,7 @@ class ApiKoreaInvestType:
 						)
 
 						rep_json = json.loads(response.text)
-						if int(rep_json["rt_cd"]) != 0: raise
+						if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code")
 
 						rep_stock_info1 = rep_json["output"]
 
@@ -1402,7 +1402,7 @@ class ApiKoreaInvestType:
 						)
 
 						rep_json = json.loads(response.text)
-						if int(rep_json["rt_cd"]) != 0: raise
+						if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code")
 
 						rep_stock_info2 = rep_json["output"]
 
@@ -1438,7 +1438,7 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code, e.__str__()})
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue

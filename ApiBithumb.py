@@ -143,7 +143,10 @@ class ApiBithumbType:
 				on_open= self.__on_ws_open,
 				on_close= self.__on_ws_close,
 				)
-			self.__ws_thread = Thread(name="Bithumb_WS", target=self.__ws_app.run_forever)
+			self.__ws_thread = Thread(
+				name="Bithumb_WS",
+				target=self.__ws_app.run_forever
+			)
 			self.__ws_thread.start()
 			
 		except: raise Exception("Fail to create web socket")

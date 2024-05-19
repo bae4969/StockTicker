@@ -194,7 +194,10 @@ class ApiKoreaInvestType:
 					on_open= self.__on_ws_open,
 					on_close= self.__on_ws_close,
 				)
-				ws_thread = Thread(name=f"KoreaInvest_WS_{approval_key}", target=ws_app.run_forever)
+				ws_thread = Thread(
+					name=f"KoreaInvest_WS_{approval_key}",
+					target=ws_app.run_forever
+				)
 
 				self.__ws_app_list.append({
 					"APPROVAL_KEY" : approval_key,
@@ -894,7 +897,7 @@ class ApiKoreaInvestType:
 				except Exception as e:
 					Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
 
-				time.sleep(0.25)
+				time.sleep(0.5)
 
 			break
 		Util.PrintNormalLog("Opened korea invest websocket")

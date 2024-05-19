@@ -391,6 +391,7 @@ class ApiKoreaInvestType:
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
 		df = pd.read_table("./temp/NYSMST.COD",sep='\t',encoding='cp949')
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
 		files = glob.glob('./temp/*')
 		for f in files:
@@ -410,6 +411,7 @@ class ApiKoreaInvestType:
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
 		df = pd.read_table("./temp/NASMST.COD",sep='\t',encoding='cp949')
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
 		files = glob.glob('./temp/*')
 		for f in files:
@@ -429,6 +431,7 @@ class ApiKoreaInvestType:
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
 		df = pd.read_table("./temp/AMSMST.COD",sep='\t',encoding='cp949')
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
+		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
 		files = glob.glob('./temp/*')
 		for f in files:
@@ -1256,6 +1259,7 @@ class ApiKoreaInvestType:
 			
 			sleep_time = 1.0 / (self.__get_rest_api_limit() + 4)
 			for stock_market in kr_type:
+				continue
 				for stock_code in stock_code_list[stock_market]:
 					if stock_code == "nan": continue
 					start_time = time.time()
@@ -1315,7 +1319,7 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code,e.__str__()})
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code, e.__str__()})
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue
@@ -1325,7 +1329,6 @@ class ApiKoreaInvestType:
 			sleep_time = 2.0 / (self.__get_rest_api_limit() + 2)	
 			for stock_market in ex_type:
 				for stock_code in stock_code_list[stock_market]:
-					if stock_code == "nan": continue
 					start_time = time.time()
 
 					try:
@@ -1433,7 +1436,7 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code,e.__str__()})
+						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%{stock_market, stock_code, e.__str__()})
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue

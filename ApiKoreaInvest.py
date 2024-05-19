@@ -1262,7 +1262,6 @@ class ApiKoreaInvestType:
 			
 			sleep_time = 1.0 / (self.__get_rest_api_limit() + 4)
 			for stock_market in kr_type:
-				continue
 				for stock_code in stock_code_list[stock_market]:
 					if stock_code == "nan": continue
 					start_time = time.time()

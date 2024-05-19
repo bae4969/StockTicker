@@ -20,6 +20,8 @@ ki = API_KI(
 	Define.KI_API_KEY_LIST,
 	)
 
+ki.UpdateStockInfo()
+
 print("\n---------------------------------------------\n")
 
 while True:

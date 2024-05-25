@@ -25,6 +25,7 @@ class ApiBithumbType:
 	__ws_thread:Thread = None
 	__ws_is_opened = False
 
+	__ws_query_datetime = DateTime.min
 	__ws_query_list_buf = {}
 	__ws_query_list_cur = {}
 
@@ -114,7 +115,11 @@ class ApiBithumbType:
 			last_query_list = cursor.fetchall()
 			self.__ws_query_list_buf = {}
 			for info in last_query_list:
-				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3]]
+				self.__ws_query_list_buf[info[0]] = {
+					"coin_code" : info[1],
+					"coin_api_type" : info[2],
+					"coin_api_coin_code" : info[3]
+				}
 
 		except: raise Exception("Fail to load last websocket query table")
 	
@@ -129,14 +134,16 @@ class ApiBithumbType:
 			last_query_list = cursor.fetchall()
 			self.__ws_query_list_cur.clear()
 			for info in last_query_list:
-				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3]]
+				self.__ws_query_list_cur[info[0]] = {
+					"coin_code" : info[1],
+					"coin_api_type" : info[2],
+					"coin_api_coin_code" : info[3]
+				}
 
 		except: raise Exception("Fail to load last websocket query table")
 
 	def __create_websocket_app(self) -> None:
 		try:
-			if self.__ws_app != None:
-				self.__ws_app.close()
 			self.__ws_app = WebSocketApp(
 				url = self.__WS_BASE_URL,
 				on_message= self.__on_ws_recv_message,
@@ -147,6 +154,8 @@ class ApiBithumbType:
 				name="Bithumb_WS",
 				target=self.__ws_app.run_forever
 			)
+			self.__ws_thread.daemon = True
+			self.__ws_is_opened = False
 			self.__ws_thread.start()
 			
 		except: raise Exception("Fail to create web socket")
@@ -158,6 +167,7 @@ class ApiBithumbType:
 	def __start_dequeue_sql_query(self) -> None:
 		self.__sql_is_stop = False
 		self.__sql_thread = Thread(name= "Bithumb_Dequeue", target=self.__func_dequeue_sql_query)
+		self.__sql_thread.daemon = True
 		self.__sql_thread.start()
 		
 	def __stop_dequeue_sql_query(self) -> None:
@@ -373,10 +383,10 @@ class ApiBithumbType:
 		
 		buf_dict = {}
 		for key, val in self.__ws_query_list_cur.items():
-			if val[1] in buf_dict:
-				buf_dict[val[1]].append(val[2])
+			if val["coin_api_type"] in buf_dict:
+				buf_dict[val["coin_api_type"]].append(val["coin_api_coin_code"])
 			else:
-				buf_dict[val[1]] = [val[2]]
+				buf_dict[val["coin_api_type"]] = [val["coin_api_coin_code"]]
 			
 		for key, val in buf_dict.items():
 			try:
@@ -449,7 +459,7 @@ class ApiBithumbType:
 				query_str = (
 					"SELECT coin_code, coin_name_kr, coin_name_en "
 					+ "FROM coin_info WHERE "
-					+ "coin_code='" + val[0] + "'"
+					+ "coin_code='" + val["coin_code"] + "'"
 				)
 				self.__sql_common_connection.ping(reconnect=True)
 				cursor = self.__sql_common_connection.cursor()
@@ -472,7 +482,7 @@ class ApiBithumbType:
 			varified_list = {}
 			for key, val in self.__ws_query_list_buf.items():
 				try:
-					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val[0], val[1], val[2])
+					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val["coin_code"], val["coin_api_type"], val["coin_api_coin_code"])
 					cursor.execute(insert_list_query)
 					varified_list[key] = val
 				except:
@@ -505,7 +515,11 @@ class ApiBithumbType:
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_query_list_buf["EX_" + coin_code] = [coin_code, "transaction", api_stock_code]
+			self.__ws_query_list_buf["EX_" + coin_code] = {
+				"coin_code" : coin_code,
+				"coin_api_type" : "transaction",
+				"coin_api_coin_code" : api_stock_code
+			}
 
 			return len(self.__ws_query_list_buf)
 		
@@ -514,6 +528,7 @@ class ApiBithumbType:
 
 	def AddCoinOrderbookQuery(self, coin_code:str) -> int:
 		try:
+			coin_code = coin_code.upper()
 			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
 				return len(self.__ws_query_list_buf)
 			
@@ -530,34 +545,49 @@ class ApiBithumbType:
 		
 			api_stock_code = coin_code + "_KRW"
 
-			self.__ws_query_list_buf["OB_" + coin_code] = [coin_code, "orderbooksnapshot", api_stock_code]
+			self.__ws_query_list_buf["OB_" + coin_code] ={
+				"coin_code" : coin_code,
+				"coin_api_type" : "orderbooksnapshot",
+				"coin_api_coin_code" : api_stock_code
+			}
 
 			return len(self.__ws_query_list_buf)
 		
 		except:
 			return -400
 
-	def DelStockExecutionQuery(self, coin_code:str) -> None:
+	def DelCoinExecutionQuery(self, coin_code:str) -> None:
 		try:
+			coin_code = coin_code.upper()
 			del self.__ws_query_list_buf["EX_" + coin_code]
 		except:
 			pass
 
-	def DelStockOrderbookQuery(self, coin_code:str) -> None:
+	def DelCoinOrderbookQuery(self, coin_code:str) -> None:
 		try:
+			coin_code = coin_code.upper()
 			del self.__ws_query_list_buf["OB_" + coin_code]
 		except:
 			pass
 
 
-
-	def IsCollecting(self) -> bool:
-		return self.__ws_is_opened
+	def GetCurrentCollectingDateTime(self) -> DateTime:
+		return self.__ws_query_datetime
 
 	def StartCollecting(self) -> None:
 		try:
+			self.__ws_query_datetime = DateTime.now()
+			self.StopCollecting()
 			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
+
+		except Exception as e:
+			Util.PrintErrorLog(e.__str__())
+
+	def CheckCollecting(self) -> None:
+		try:
+			if self.__ws_is_opened == False:
+				self.__create_websocket_app()
 
 		except Exception as e:
 			Util.PrintErrorLog(e.__str__())

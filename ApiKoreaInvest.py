@@ -19,18 +19,18 @@ from datetime import timedelta
 def GetKrQueryCount(query_list:dict) -> int:
 	cnt = 0
 	for key, val in query_list.items():
-		if (val[1].find("KOSPI") != -1 or
-			val[1].find("KOSDAQ") != -1 or
-			val[1].find("KONEX") != -1):
+		if (val["stock_market"].find("KOSPI") != -1 or
+			val["stock_market"].find("KOSDAQ") != -1 or
+			val["stock_market"].find("KONEX") != -1):
 			cnt += 1
 
 	return cnt
 def GetUsQueryCount(query_list:dict) -> int:
 	cnt = 0
 	for key, val in query_list.items():
-		if (val[1].find("NYSE") != -1 or
-			val[1].find("NASDAQ") != -1 or
-			val[1].find("AMEX") != -1):
+		if (val["stock_market"].find("NYSE") != -1 or
+			val["stock_market"].find("NASDAQ") != -1 or
+			val["stock_market"].find("AMEX") != -1):
 			cnt += 1
 
 	return cnt
@@ -116,7 +116,6 @@ class ApiKoreaInvestType:
 				"CREATE TABLE IF NOT EXISTS stock_last_ws_query ("
 				+ "stock_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
-				+ "stock_market VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_stock_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "PRIMARY KEY (stock_query) USING BTREE,"
@@ -132,7 +131,13 @@ class ApiKoreaInvestType:
 
 	def __load_last_ws_query_table(self) -> None:
 		try:
-			select_query = "SELECT * FROM stock_last_ws_query"
+			select_query = (
+				"SELECT "
+				+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+				+ "FROM stock_last_ws_query AS L "
+				+ "JOIN stock_info AS I "
+				+ "ON L.stock_code = I.stock_code "
+			)
 			self.__sql_common_connection.ping(reconnect=True)
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
@@ -140,14 +145,25 @@ class ApiKoreaInvestType:
 			last_query_list = cursor.fetchall()
 			self.__ws_query_list_buf = {}
 			for info in last_query_list:
-				self.__ws_query_list_buf[info[0]] = [info[1], info[2], info[3], info[4]]
+				self.__ws_query_list_buf[info[0]] = {
+					"stock_code" : info[1],
+					"stock_market" : info[2],
+					"stock_api_type" : info[3],
+					"stock_api_stock_code" : info[4]
+				}
 
 		except: raise Exception("Fail to load last websocket query table")
 
 
 	def __sync_last_ws_query_table(self) -> None:
 		try:
-			select_query = "SELECT * FROM stock_last_ws_query"
+			select_query = (
+				"SELECT "
+				 + "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+				 + "FROM stock_last_ws_query AS L "
+				 + "JOIN stock_info AS I "
+				 + "ON L.stock_code = I.stock_code "
+			)
 			self.__sql_common_connection.ping(reconnect=True)
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
@@ -155,16 +171,17 @@ class ApiKoreaInvestType:
 			last_query_list = cursor.fetchall()
 			self.__ws_query_list_cur.clear()
 			for info in last_query_list:
-				self.__ws_query_list_cur[info[0]] = [info[1], info[2], info[3], info[4]]
+				self.__ws_query_list_cur[info[0]] = {
+					"stock_code" : info[1],
+					"stock_market" : info[2],
+					"stock_api_type" : info[3],
+					"stock_api_stock_code" : info[4]
+				}
 
 		except: raise Exception("Fail to load last websocket query table")
 
 	def __create_websocket_app(self) -> None:
 		try:
-			for ws_app in self.__ws_app_list:
-				ws_app["WS_APP"].close()
-			self.__ws_app_list.clear()
-
 			for api_key in self.__api_key_list:
 				cur_key = api_key["KEY"]
 				cur_secret = api_key["SECRET"]
@@ -198,6 +215,7 @@ class ApiKoreaInvestType:
 					name=f"KoreaInvest_WS_{approval_key}",
 					target=ws_app.run_forever
 				)
+				ws_thread.daemon = True
 
 				self.__ws_app_list.append({
 					"APPROVAL_KEY" : approval_key,
@@ -213,14 +231,14 @@ class ApiKoreaInvestType:
 			app_idx = 0
 			for val in self.__ws_query_list_cur.values():
 				if (self.__ws_query_type == "KR" and 
-					val[1].find("KOSPI") == -1 and
-					val[1].find("KOSDAQ") == -1 and
-					val[1].find("KONEX") == -1
+					val["stock_market"].find("KOSPI") == -1 and
+					val["stock_market"].find("KOSDAQ") == -1 and
+					val["stock_market"].find("KONEX") == -1
 					) or (
 					self.__ws_query_type == "EX" and 
-					val[1].find("NYSE") == -1 and
-					val[1].find("NASDAQ") == -1 and
-					val[1].find("AMEX") == -1
+					val["stock_market"].find("NYSE") == -1 and
+					val["stock_market"].find("NASDAQ") == -1 and
+					val["stock_market"].find("AMEX") == -1
 					): continue
 				
 				self.__ws_app_list[app_idx]["WS_QUERY_LIST"].append(val)
@@ -546,6 +564,7 @@ class ApiKoreaInvestType:
 	def __start_dequeue_sql_query(self) -> None:
 		self.__sql_is_stop = False
 		self.__sql_thread = Thread(name="KoreaInvest_Dequeue",target=self.__func_dequeue_sql_query)
+		self.__sql_thread.daemon = True
 		self.__sql_thread.start()
 		
 	def __stop_dequeue_sql_query(self) -> None:
@@ -887,8 +906,8 @@ class ApiKoreaInvestType:
 						},
 						"body" : {
 							"input": {
-								"tr_id": query_info[2],
-								"tr_key": query_info[3]
+								"tr_id": query_info["stock_api_type"],
+								"tr_key": query_info["stock_api_stock_code"]
 							}
 						}
 					}
@@ -1026,15 +1045,15 @@ class ApiKoreaInvestType:
 		try:
 			ret = []
 			for key, val in self.__ws_query_list_buf.items():
-				if (val[1].find("KOSPI") == -1 and
-					val[1].find("KOSDAQ") == -1 and
-					val[1].find("KONEX") == -1):
+				if (val["stock_market"].find("KOSPI") == -1 and
+					val["stock_market"].find("KOSDAQ") == -1 and
+					val["stock_market"].find("KONEX") == -1):
 					continue
 
 				query_str = (
 					"SELECT stock_code, stock_name_kr, stock_name_en "
 					+ "FROM stock_info WHERE "
-					+ "stock_code='" + val[0] + "'"
+					+ "stock_code='" + val["stock_code"] + "'"
 				)
 				self.__sql_common_connection.ping(reconnect=True)
 				cursor = self.__sql_common_connection.cursor()
@@ -1051,14 +1070,14 @@ class ApiKoreaInvestType:
 		try:
 			ret = []
 			for key, val in self.__ws_query_list_buf.items():
-				if (val[1].find("NYSE") == -1 and
-					val[1].find("NASDAQ") == -1):
+				if (val["stock_market"].find("NYSE") == -1 and
+					val["stock_market"].find("NASDAQ") == -1):
 					continue
 
 				query_str = (
 					"SELECT stock_code, stock_name_kr, stock_name_en "
 					+ "FROM stock_info WHERE "
-					+ "stock_code='" + val[0] + "'"
+					+ "stock_code='" + val["stock_code"] + "'"
 				)
 				self.__sql_common_connection.ping(reconnect=True)
 				cursor = self.__sql_common_connection.cursor()
@@ -1081,7 +1100,7 @@ class ApiKoreaInvestType:
 			varified_list = {}
 			for key, val in self.__ws_query_list_buf.items():
 				try:
-					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s','%s')"%(key, val[0], val[1], val[2], val[3])
+					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val["stock_code"], val["stock_api_type"], val["stock_api_stock_code"])
 					cursor.execute(insert_list_query)
 					varified_list[key] = val
 				except:
@@ -1099,7 +1118,7 @@ class ApiKoreaInvestType:
 		try:
 			stock_code = stock_code.upper()
 			if self.__ws_query_list_buf.__contains__("EX_" + stock_code):
-				stock_market = self.__ws_query_list_buf["EX_" + stock_code][1]
+				stock_market = self.__ws_query_list_buf["EX_" + stock_code]["stock_market"]
 				if (stock_market == "NYSE" or
 					stock_market == "NASDAQ" or
 					stock_market == "AMEX"):
@@ -1136,7 +1155,12 @@ class ApiKoreaInvestType:
 				api_code = "H0STCNT0"
 				api_stock_code = stock_code
 
-			self.__ws_query_list_buf["EX_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
+			self.__ws_query_list_buf["EX_" + stock_code] = {
+					"stock_code" : stock_code,
+					"stock_market" : stock_market,
+					"stock_api_type" : api_code,
+					"stock_api_stock_code" : api_stock_code
+			}
 
 			if (stock_market == "NYSE" or
 				stock_market == "NASDAQ" or
@@ -1152,7 +1176,7 @@ class ApiKoreaInvestType:
 		try:
 			stock_code = stock_code.upper()
 			if self.__ws_query_list_buf.__contains__("OB_" + stock_code):
-				stock_market = self.__ws_query_list_buf["OB_" + stock_code][1]
+				stock_market = self.__ws_query_list_buf["OB_" + stock_code]["stock_market"]
 				if (stock_market == "NYSE" or
 					stock_market == "NASDAQ" or
 					stock_market == "AMEX"):
@@ -1189,7 +1213,12 @@ class ApiKoreaInvestType:
 				api_code = "H0STASP0"
 				api_stock_code = stock_code
 
-			self.__ws_query_list_buf["OB_" + stock_code] = [stock_code, stock_market, api_code, api_stock_code]
+			self.__ws_query_list_buf["OB_" + stock_code] = {
+					"stock_code" : stock_code,
+					"stock_market" : stock_market,
+					"stock_api_type" : api_code,
+					"stock_api_stock_code" : api_stock_code
+			}
 
 			if (stock_market == "NYSE" or
 				stock_market == "NASDAQ" or
@@ -1216,23 +1245,36 @@ class ApiKoreaInvestType:
 			pass
 
 
-	def IsCollecting(self) -> bool:
-		if len(self.__ws_app_list) == 0:
-			return False
-		for ws_app in self.__ws_app_list:
-			if ws_app["WS_IS_OPENED"] == False:
-				return False
-			
-		return True
-
 	def GetCurrentCollectingType(self) -> str:
 		return self.__ws_query_type
 
 	def StartCollecting(self, query_type:str) -> None:
 		try:
 			self.__ws_query_type = query_type
+			self.StopCollecting()
 			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
+
+		except Exception as e:
+			Util.PrintErrorLog(e.__str__())
+
+	def CheckCollecting(self) -> None:
+		try:
+			for ws_app in self.__ws_app_list:
+				if ws_app["WS_IS_OPENED"] == True: continue
+				ws_app["WS_THREAD"].join()
+				ws_app["WS_APP"] = WebSocketApp(
+					url = self.__WS_BASE_URL,
+					on_message= self.__on_ws_recv_message,
+					on_open= self.__on_ws_open,
+					on_close= self.__on_ws_close,
+				)
+				ws_app["WS_THREAD"] = Thread(
+					name= "KoreaInvest_WS_" + ws_app["APPROVAL_KEY"],
+					target= ws_app["WS_APP"].run_forever
+				)
+				ws_app["WS_THREAD"].daemon = True
+				ws_app["WS_THREAD"].start()
 
 		except Exception as e:
 			Util.PrintErrorLog(e.__str__())

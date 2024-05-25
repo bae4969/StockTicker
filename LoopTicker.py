@@ -22,7 +22,6 @@ ki = API_KI(
     Define.KI_API_KEY_LIST,
 )
 
-next_coin_reboot_datetime = DateTime.now().replace(hour=3, minute=0, second=0) + TimeDelta(days=1)
 next_update_info_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
 if next_update_info_datetime.weekday() < 6:
     next_update_info_datetime += TimeDelta(days= 6 - next_update_info_datetime.weekday())
@@ -43,15 +42,15 @@ while True:
             Thread(name="Bithumb_Update_Coin_Info", target=bh.UpdateCoinInfo).start()
             Thread(name="KoreaInvest_Update_Stock_Info", target=ki.UpdateStockInfo).start()
 
-        if bh.IsCollecting() == False or next_coin_reboot_datetime < DateTime.now():
-            if next_coin_reboot_datetime < DateTime.now():
-                next_coin_reboot_datetime += TimeDelta(days=1)
-            bh.StopCollecting()
+        if DateTime.now() - bh.GetCurrentCollectingDateTime() > TimeDelta(days=1):
             Thread(name="Bithumb_Start_Collector", target=bh.StartCollecting).start()
+        else:
+            bh.CheckCollecting()
 
-        if ki.IsCollecting() == False or target_market != ki.GetCurrentCollectingType():
-            ki.StopCollecting()
+        if target_market != ki.GetCurrentCollectingType():
             Thread(name="KoreaInvest_Start_Collector", target=ki.StartCollecting(target_market)).start()
+        else:
+            ki.CheckCollecting()
 
         time.sleep(10)
     except:

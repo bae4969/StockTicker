@@ -576,7 +576,7 @@ class ApiBithumbType:
 
 	def StartCollecting(self) -> None:
 		try:
-			self.__ws_query_datetime = DateTime.now()
+			self.__ws_query_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
 			self.StopCollecting()
 			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
@@ -586,9 +586,9 @@ class ApiBithumbType:
 
 	def CheckCollecting(self) -> None:
 		try:
-			if self.__ws_is_opened == False:
-				self.StopCollecting()
-				self.__create_websocket_app()
+			if self.__ws_is_opened == True: return
+			self.StopCollecting()
+			self.__create_websocket_app()
 
 		except Exception as e:
 			Util.PrintErrorLog(e.__str__())

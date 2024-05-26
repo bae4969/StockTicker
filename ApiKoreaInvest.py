@@ -218,6 +218,9 @@ class ApiKoreaInvestType:
 				ws_thread.daemon = True
 
 				self.__ws_app_list.append({
+					"APPROVAL_REQ_URL" : api_url,
+					"APPROVAL_REQ_HEADER" : api_header,
+					"APPROVAL_REQ_BODY" : api_body,
 					"APPROVAL_KEY" : approval_key,
 					"WS_APP" : ws_app,
 					"WS_THREAD" : ws_thread,
@@ -1262,8 +1265,17 @@ class ApiKoreaInvestType:
 		try:
 			for ws_app in self.__ws_app_list:
 				if ws_app["WS_IS_OPENED"] == True: continue
-				ws_app["WS_APP"].close()
-				ws_app["WS_THREAD"].join()
+				if ws_app["WS_APP"] != None:
+					ws_app["WS_APP"].close()
+					ws_app["WS_THREAD"].join()
+
+				response = requests.post (
+					url = self.__API_BASE_URL + ws_app["APPROVAL_REQ_URL"],
+					headers = ws_app["APPROVAL_REQ_HEADER"],
+					data = json.dumps(ws_app["APPROVAL_REQ_BODY"]),
+				)
+				rep_json = json.loads(response.text)
+				ws_app["APPROVAL_KEY"] = rep_json["approval_key"]
 				ws_app["WS_APP"] = WebSocketApp(
 					url = self.__WS_BASE_URL,
 					on_message= self.__on_ws_recv_message,
@@ -1275,6 +1287,7 @@ class ApiKoreaInvestType:
 					target= ws_app["WS_APP"].run_forever
 				)
 				ws_app["WS_THREAD"].daemon = True
+				ws_app["WS_IS_OPENED"] = False
 				ws_app["WS_THREAD"].start()
 
 		except Exception as e:

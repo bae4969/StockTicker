@@ -43,12 +43,12 @@ while True:
             Thread(name="KoreaInvest_Update_Stock_Info", target=ki.UpdateStockInfo).start()
 
         if DateTime.now() - bh.GetCurrentCollectingDateTime() > TimeDelta(days=1):
-            Thread(name="Bithumb_Start_Collector", target=bh.StartCollecting).start()
+            bh.StartCollecting()
         else:
             bh.CheckCollecting()
 
         if target_market != ki.GetCurrentCollectingType():
-            Thread(name="KoreaInvest_Start_Collector", target=ki.StartCollecting(target_market)).start()
+            ki.StartCollecting(target_market)
         else:
             ki.CheckCollecting()
 

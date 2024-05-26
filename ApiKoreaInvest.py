@@ -1262,6 +1262,7 @@ class ApiKoreaInvestType:
 		try:
 			for ws_app in self.__ws_app_list:
 				if ws_app["WS_IS_OPENED"] == True: continue
+				ws_app["WS_APP"].close()
 				ws_app["WS_THREAD"].join()
 				ws_app["WS_APP"] = WebSocketApp(
 					url = self.__WS_BASE_URL,

@@ -587,6 +587,7 @@ class ApiBithumbType:
 	def CheckCollecting(self) -> None:
 		try:
 			if self.__ws_is_opened == False:
+				self.StopCollecting()
 				self.__create_websocket_app()
 
 		except Exception as e:

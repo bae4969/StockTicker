@@ -1255,6 +1255,7 @@ class ApiKoreaInvestType:
 		try:
 			self.__ws_query_type = query_type
 			self.StopCollecting()
+			time.sleep(3)
 			self.__sync_last_ws_query_table()
 			self.__create_websocket_app()
 
@@ -1265,7 +1266,7 @@ class ApiKoreaInvestType:
 		try:
 			for ws_app in self.__ws_app_list:
 				if ws_app["WS_IS_OPENED"] == True: continue
-				if ws_app["WS_APP"] != None:
+				if ws_app["WS_APP"] != None and ws_app["WS_THREAD"].is_alive():
 					ws_app["WS_APP"].close()
 					ws_app["WS_THREAD"].join()
 
@@ -1295,9 +1296,10 @@ class ApiKoreaInvestType:
 
 	def StopCollecting(self) -> None:
 		for ws_app in self.__ws_app_list:
-			if ws_app["WS_APP"] != None:
+			if ws_app["WS_APP"] != None and ws_app["WS_THREAD"].is_alive():
 				ws_app["WS_APP"].close()
 				ws_app["WS_THREAD"].join()
+		self.__ws_app_list.clear()
 	
 
 	def UpdateStockInfo(self) -> None:

@@ -594,7 +594,7 @@ class ApiBithumbType:
 			Util.PrintErrorLog(e.__str__())
 
 	def StopCollecting(self) -> None:
-		if self.__ws_app != None:
+		if self.__ws_app != None and self.__ws_thread.is_alive():
 			self.__ws_app.close()
 			self.__ws_thread.join()
 	

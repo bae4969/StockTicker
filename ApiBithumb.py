@@ -1,4 +1,4 @@
-import Util
+from Util import MySqlLogger
 import requests
 from websocket import WebSocketApp
 import pymysql
@@ -12,6 +12,8 @@ from datetime import timedelta
 
 
 class ApiBithumbType:
+	__logger:MySqlLogger = None
+
 	__sql_common_connection:pymysql.Connection = None
 	__sql_query_connection:pymysql.Connection = None
 	__sql_is_stop:bool = False
@@ -34,6 +36,12 @@ class ApiBithumbType:
 
 
 	def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str):
+		self.__logger = MySqlLogger(
+			sql_host=sql_host,
+			sql_id=sql_id,
+			sql_pw=sql_pw,
+			log_name="ApiBithumb"
+		)
 		self.__sql_common_connection = pymysql.connect(
 			host = sql_host,
 			port = 3306,
@@ -72,6 +80,7 @@ class ApiBithumbType:
 				+ "coin_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "coin_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "coin_order INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,"
+				+ "coin_update DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
 				+ "PRIMARY KEY (coin_code) USING BTREE,"
 				+ "UNIQUE INDEX coin_code (coin_code) USING BTREE,"
 				+ "INDEX coin_name (coin_name_kr, coin_name_en) USING BTREE,"
@@ -367,7 +376,7 @@ class ApiBithumbType:
 				if msg_json["status"] != "0000":
 					status = msg_json["status"]
 					msg = msg_json["resmsg"]
-					Util.PrintNormalLog(f"Fail msg : [ {status}:{msg} ]")
+					self.__logger.InsertNormalLog(f"Fail msg : [ {status}:{msg} ]")
 
 			elif "type" in msg_json:
 				if msg_json["type"] == "transaction":
@@ -376,7 +385,7 @@ class ApiBithumbType:
 					Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook(msg_json)).start()
 
 		except Exception as e:
-			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
+			self.__logger.InsertErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
 	def __on_ws_open(self, ws:WebSocketApp) -> None:
 		self.__ws_is_opened = True
@@ -397,15 +406,15 @@ class ApiBithumbType:
 				self.__ws_app.send(json.dumps(msg))
 
 			except Exception as e:
-				Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
+				self.__logger.InsertErrorLog("Fail to process ws send msg : " + e.__str__())
 
 			time.sleep(0.25)
 
-		Util.PrintNormalLog("Opened bithumb websocket")
+		self.__logger.InsertNormalLog("Opened bithumb websocket")
 
 	def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
 		self.__ws_is_opened = False
-		Util.PrintNormalLog("Closed bithumb websocket")
+		self.__logger.InsertNormalLog("Closed bithumb websocket")
 
 
 	##########################################################################
@@ -427,7 +436,7 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 
 	def GetCoinList(self, cnt:int, offset:int = 0) -> list:
@@ -445,7 +454,7 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 	
 
@@ -469,7 +478,7 @@ class ApiBithumbType:
 			return ret
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 
 	def UpdateAllQuery(self) -> bool:
@@ -582,7 +591,7 @@ class ApiBithumbType:
 			self.__create_websocket_app()
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 
 	def CheckCollecting(self) -> None:
 		try:
@@ -591,7 +600,7 @@ class ApiBithumbType:
 			self.__create_websocket_app()
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 
 	def StopCollecting(self) -> None:
 		if self.__ws_app != None and self.__ws_thread.is_alive():
@@ -651,10 +660,10 @@ class ApiBithumbType:
 				cursor.execute(query_str)
 
 				
-			Util.PrintNormalLog("Success to update coin info")
+			self.__logger.InsertNormalLog("Success to update coin info")
 
 		except Exception as e: 
-			Util.PrintErrorLog("Fail to update coin info : " + e.__str__())
+			self.__logger.InsertErrorLog("Fail to update coin info : " + e.__str__())
 
 
 

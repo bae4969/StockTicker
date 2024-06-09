@@ -1,4 +1,4 @@
-import Util
+from Util import MySqlLogger
 import requests
 from websocket import WebSocketApp
 import pymysql
@@ -36,6 +36,8 @@ def GetUsQueryCount(query_list:dict) -> int:
 	return cnt
 
 class ApiKoreaInvestType:
+	__logger:MySqlLogger = None
+
 	__sql_common_connection:pymysql.Connection = None
 	__sql_query_connection:pymysql.Connection = None
 	__sql_is_stop:bool = False
@@ -58,6 +60,12 @@ class ApiKoreaInvestType:
 
 
 	def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str, api_key_list:list):
+		self.__logger = MySqlLogger(
+			sql_host=sql_host,
+			sql_id=sql_id,
+			sql_pw=sql_pw,
+			log_name="ApiKoreaInvest"
+		)
 		self.__sql_common_connection = pymysql.connect(
 			host = sql_host,
 			port = 3306,
@@ -98,6 +106,7 @@ class ApiKoreaInvestType:
 				+ "stock_count BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_capitalization DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
+				+ "stock_update DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,"
 				+ "PRIMARY KEY (stock_code) USING BTREE,"
 				+ "UNIQUE INDEX stock_code (stock_code) USING BTREE,"
 				+ "INDEX stock_name (stock_name_kr, stock_name_en) USING BTREE"
@@ -558,7 +567,7 @@ class ApiKoreaInvestType:
 			file.write(file_data.__str__().replace("'", "\""))
 			file.close()
 
-		except: Util.PrintErrorLog("Fail to create access token for KoreaInvest Api")
+		except: self.__logger.InsertErrorLog("Fail to create access token for KoreaInvest Api")
 
 
 	##########################################################################
@@ -888,10 +897,10 @@ class ApiKoreaInvestType:
 					rt_cd = msg_json["body"]["rt_cd"]
 
 					if rt_cd != '0':
-						Util.PrintErrorLog("Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+						self.__logger.InsertErrorLog("Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
 
 		except Exception as e:
-			Util.PrintErrorLog("Fail to process ws recv msg : " + e.__str__())
+			self.__logger.InsertErrorLog("Fail to process ws recv msg : " + e.__str__())
 	
 	def __on_ws_open(self, ws:WebSocketApp) -> None:
 		for ws_app in self.__ws_app_list:
@@ -917,19 +926,19 @@ class ApiKoreaInvestType:
 					ws.send(json.dumps(msg))
 
 				except Exception as e:
-					Util.PrintErrorLog("Fail to process ws send msg : " + e.__str__())
+					self.__logger.InsertErrorLog("Fail to process ws send msg : " + e.__str__())
 
 				time.sleep(0.5)
 
 			break
-		Util.PrintNormalLog("Opened korea invest websocket")
+		self.__logger.InsertNormalLog("Opened korea invest websocket")
 
 	def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
 		for ws_app in self.__ws_app_list:
 			if ws_app["WS_APP"] != ws: continue
 			ws_app["WS_IS_OPENED"] = False
 			break
-		Util.PrintNormalLog("Closed korea invest websocket")
+		self.__logger.InsertNormalLog("Closed korea invest websocket")
 
 
 	##########################################################################
@@ -951,7 +960,7 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 
 	def FindKrStock(self, name:str) -> list:
@@ -974,7 +983,7 @@ class ApiKoreaInvestType:
 				return cursor.fetchall()
 			
 			except Exception as e:
-				Util.PrintErrorLog(e.__str__())
+				self.__logger.InsertErrorLog(e.__str__())
 				return []
 
 	def FindUsStock(self, name:str) -> list:
@@ -996,7 +1005,7 @@ class ApiKoreaInvestType:
 				return cursor.fetchall()
 			
 			except Exception as e:
-				Util.PrintErrorLog(e.__str__())
+				self.__logger.InsertErrorLog(e.__str__())
 				return []
 
 	def GetKrStockList(self, cnt:int, offset:int = 0) -> list:
@@ -1017,7 +1026,7 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 	
 	def GetUsStockList(self, cnt:int, offset:int = 0) -> list:
@@ -1037,7 +1046,7 @@ class ApiKoreaInvestType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 
 
@@ -1066,7 +1075,7 @@ class ApiKoreaInvestType:
 			return ret
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 		
 	def GetInsertedUsQueryList(self) -> list:
@@ -1090,7 +1099,7 @@ class ApiKoreaInvestType:
 			return ret
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 			return []
 		
 	def UpdateAllQuery(self) -> bool:
@@ -1260,7 +1269,7 @@ class ApiKoreaInvestType:
 			self.__create_websocket_app()
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 
 	def CheckCollecting(self) -> None:
 		try:
@@ -1292,7 +1301,7 @@ class ApiKoreaInvestType:
 				ws_app["WS_THREAD"].start()
 
 		except Exception as e:
-			Util.PrintErrorLog(e.__str__())
+			self.__logger.InsertErrorLog(e.__str__())
 
 	def StopCollecting(self) -> None:
 		for ws_app in self.__ws_app_list:
@@ -1318,7 +1327,7 @@ class ApiKoreaInvestType:
 			kr_type = ["KOSPI", "KOSDAQ", "KONEX"]
 			ex_type = ["NASDAQ", "NYSE", "AMEX"]
 			
-			sleep_time = 1.0 / (self.__get_rest_api_limit() + 4)
+			sleep_time = 1.0 / (self.__get_rest_api_limit() - 4)
 			for stock_market in kr_type:
 				for stock_code in stock_code_list[stock_market]:
 					if stock_code == "nan": continue
@@ -1379,14 +1388,14 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
+						self.__logger.InsertErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue
 
 					time.sleep(sleep_time - excution_time)
 				
-			sleep_time = 2.0 / (self.__get_rest_api_limit() + 2)	
+			sleep_time = 2.0 / (self.__get_rest_api_limit() - 2)	
 			for stock_market in ex_type:
 				for stock_code in stock_code_list[stock_market]:
 					start_time = time.time()
@@ -1496,17 +1505,17 @@ class ApiKoreaInvestType:
 						)
 
 					except Exception as e:
-						Util.PrintErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
+						self.__logger.InsertErrorLog("Fail to update stock info [ %s:%s | %s ]"%(stock_market, stock_code, e.__str__()))
 
 					excution_time = time.time() - start_time
 					if excution_time >= sleep_time: continue
 
 					time.sleep(sleep_time - excution_time)
 
-			Util.PrintNormalLog("Success to update stock info")
+			self.__logger.InsertNormalLog("Success to update stock info")
 
 		except Exception as e:
-			Util.PrintErrorLog("Fail to update stock info : " + e.__str__())
+			self.__logger.InsertErrorLog("Fail to update stock info : " + e.__str__())
 
 
 		

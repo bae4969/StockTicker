@@ -4,6 +4,7 @@ from ApiBithumb import ApiBithumbType as API_BH
 import time
 from threading import Thread
 import tabulate
+import signal
 from datetime import datetime as DateTime
 from datetime import timedelta as TimeDelta
 
@@ -21,6 +22,10 @@ ki = API_KI(
     Define.SQL_KI_DB,
     Define.KI_API_KEY_LIST,
 )
+signal.signal(signal.SIGINT, bh.StopCollecting)
+signal.signal(signal.SIGINT, ki.StopCollecting)
+signal.signal(signal.SIGTERM, bh.StopCollecting)
+signal.signal(signal.SIGTERM, ki.StopCollecting)
 
 next_update_info_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
 if next_update_info_datetime.weekday() < 6:

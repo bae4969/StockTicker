@@ -474,11 +474,16 @@ class ApiKoreaInvestType:
 	
 
 	def __update_token(self) -> None:
+		for api_key in self.__api_key_list:
+			del api_key["TOKEN_TYPE"]
+			del api_key["TOKEN_VAL"]
+			del api_key["TOKEN_DATETIME"]
+			del api_key["TOKEN_HEADER"]
+
 		try:
 			file = open("./doc/last_token_info.dat", 'r')
 			file_all_string = file.read()
 			file.close()
-
 			file_data = json.loads(file_all_string)
 
 			for key, value in file_data.items():

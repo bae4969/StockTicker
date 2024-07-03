@@ -475,10 +475,14 @@ class ApiKoreaInvestType:
 
 	def __update_token(self) -> None:
 		for api_key in self.__api_key_list:
-			del api_key["TOKEN_TYPE"]
-			del api_key["TOKEN_VAL"]
-			del api_key["TOKEN_DATETIME"]
-			del api_key["TOKEN_HEADER"]
+			if "TOKEN_TYPE" in api_key:
+				del api_key["TOKEN_TYPE"]
+			if "TOKEN_VAL" in api_key:
+				del api_key["TOKEN_VAL"]
+			if "TOKEN_DATETIME" in api_key:
+				del api_key["TOKEN_DATETIME"]
+			if "TOKEN_HEADER" in api_key:
+				del api_key["TOKEN_HEADER"]
 
 		try:
 			file = open("./doc/last_token_info.dat", 'r')

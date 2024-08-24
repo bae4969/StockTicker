@@ -1,4 +1,5 @@
 import doc.Define as Define
+import Util
 from ApiKoreaInvest import ApiKoreaInvestType as API_KI
 from ApiBithumb import ApiBithumbType as API_BH
 import time
@@ -28,6 +29,7 @@ if next_update_info_datetime.weekday() < 6:
 else:
 	next_update_info_datetime += TimeDelta(days= 7)
 
+time.sleep(2)
 while True:
     try:
         kr_min_datetime = DateTime.now().replace(hour=8, minute=0, second=0)
@@ -39,18 +41,14 @@ while True:
 
         if next_update_info_datetime < DateTime.now():
             next_update_info_datetime += TimeDelta(days=7)
-            Thread(name="Bithumb_Update_Coin_Info", target=bh.UpdateCoinInfo).start()
-            Thread(name="KoreaInvest_Update_Stock_Info", target=ki.UpdateStockInfo).start()
+            Thread(name="Bithumb_Update_Coin_Info", target=bh.SyncWeeklyInfo).start()
+            Thread(name="KoreaInvest_Update_Stock_Info", target=ki.SyncWeeklyInfo).start()
 
         if DateTime.now() - bh.GetCurrentCollectingDateTime() > TimeDelta(days=1):
-            bh.StartCollecting()
-        else:
-            bh.CheckCollecting()
+            bh.SyncDailyInfo()
 
         if target_market != ki.GetCurrentCollectingType():
-            ki.StartCollecting(target_market)
-        else:
-            ki.CheckCollecting()
+            ki.SyncDailyInfo(target_market)
 
         time.sleep(10)
     except:

@@ -1,4 +1,4 @@
-from Util import MySqlLogger
+import Util
 import requests
 from websocket import WebSocketApp
 import pymysql
@@ -12,8 +12,7 @@ from datetime import timedelta
 
 
 class ApiBithumbType:
-	__logger:MySqlLogger = None
-
+	__sql_main_db:str
 	__sql_common_connection:pymysql.Connection = None
 	__sql_query_connection:pymysql.Connection = None
 	__sql_is_stop:bool = False
@@ -26,22 +25,18 @@ class ApiBithumbType:
 	__ws_app:WebSocketApp = None
 	__ws_thread:Thread = None
 	__ws_is_opened = False
+	__ws_keep_connect = True
+	__ws_query_list = []
 
 	__ws_query_datetime = DateTime.min
 	__ws_query_list_buf = {}
-	__ws_query_list_cur = {}
 
 
 	##########################################################################
 
 
 	def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str):
-		self.__logger = MySqlLogger(
-			sql_host=sql_host,
-			sql_id=sql_id,
-			sql_pw=sql_pw,
-			log_name="ApiBithumb"
-		)
+		self.__sql_main_db = sql_db
 		self.__sql_common_connection = pymysql.connect(
 			host = sql_host,
 			port = 3306,
@@ -64,9 +59,12 @@ class ApiBithumbType:
 		self.__create_last_ws_query_table()
 		self.__load_last_ws_query_table()
 		self.__start_dequeue_sql_query()
+  
+		self.__create_ws_app_info()
 
 	def __del__(self):
-		self.StopCollecting()
+		self.__ws_keep_connect = False
+		self.__ws_app.close()
 		self.__stop_dequeue_sql_query()
 
 
@@ -132,43 +130,95 @@ class ApiBithumbType:
 
 		except: raise Exception("Fail to load last websocket query table")
 	
-
-	def __sync_last_ws_query_table(self) -> None:
-		try:
-			select_query = "SELECT * FROM coin_last_ws_query"
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(select_query)
-
-			last_query_list = cursor.fetchall()
-			self.__ws_query_list_cur.clear()
-			for info in last_query_list:
-				self.__ws_query_list_cur[info[0]] = {
-					"coin_code" : info[1],
-					"coin_api_type" : info[2],
-					"coin_api_coin_code" : info[3]
-				}
-
-		except: raise Exception("Fail to load last websocket query table")
-
-	def __create_websocket_app(self) -> None:
-		try:
-			self.__ws_app = WebSocketApp(
-				url = self.__WS_BASE_URL,
-				on_message= self.__on_ws_recv_message,
-				on_open= self.__on_ws_open,
-				on_close= self.__on_ws_close,
-				)
-			self.__ws_thread = Thread(
-				name="Bithumb_WS",
-				target=self.__ws_app.run_forever
+ 
+	def __create_ws_app_info(self) -> None:
+		self.__ws_app = WebSocketApp(
+			url = self.__WS_BASE_URL,
+			on_message= self.__on_ws_recv_message,
+			on_open= self.__on_ws_open,
+			on_close= self.__on_ws_close,
 			)
-			self.__ws_thread.daemon = True
-			self.__ws_is_opened = False
-			self.__ws_thread.start()
-			
-		except: raise Exception("Fail to create web socket")
-		
+		self.__ws_thread = Thread(
+			name="Bithumb_WS",
+			target=self.__ws_app.run_forever
+		)
+		self.__ws_is_opened = False
+		self.__ws_thread.daemon = True
+		self.__ws_thread.start()
+		self.__ws_keep_connect = True
+		self.__ws_query_list = []
+
+
+	##########################################################################
+
+
+	def __get_coin_name_dict(self) -> dict:
+		# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
+		upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
+		upbit_rep_json = json.loads(upbit_rep.text)
+  
+		coin_name_dict = {}
+		for data in upbit_rep_json:
+			try:
+				from_to = data["market"].split("-")
+				if from_to[0] != "KRW": continue
+				coin_name_dict[from_to[1]] = [
+        			data["korean_name"],
+           			data["english_name"],
+              	]
+			except:
+				continue
+
+		return coin_name_dict
+
+	def __get_coin_price_dict(self) -> dict:
+		bithumb_rep = requests.get(url = "https://api.bithumb.com/public/ticker/ALL_KRW")
+		bithumb_rep_json = json.loads(bithumb_rep.text)
+		if bithumb_rep_json["status"] != "0000":
+			raise Exception("UPBIT REQUEST ERROR")
+		data_list = bithumb_rep_json["data"]
+
+		coin_price_dict = {}
+		for key, val in data_list.items():
+			if key == "date": continue
+   
+			coin_price_dict[key] = [
+				val["closing_price"],
+				val["acc_trade_value_24H"],
+			]
+   
+		return coin_price_dict
+
+
+	def __sync_coin_info_table(self) -> None:
+		try:
+			coin_name_dict = self.__get_coin_name_dict()
+			coin_price_dict = self.__get_coin_price_dict()
+   
+			for key, price_data in coin_price_dict.items():
+				if key in coin_name_dict:
+					name_kr = coin_name_dict[key][0]
+					name_en = coin_name_dict[key][1]
+				else:
+					name_kr = key
+					name_en = key
+    
+				coin_info_dict = {
+					'coin_code' : key,
+					'coin_name_kr' : name_kr,
+					'coin_name_en' : name_en,
+					'coin_price' : price_data[0],
+					'coin_amount' : price_data[1]
+				}
+    
+				self.__update_coin_info_table(coin_info_dict)
+
+				
+			Util.InsertLog("ApiBithumb", "N", "Success to update coin info")
+
+		except Exception as e: 
+			Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
+ 
 
 	##########################################################################
  
@@ -200,6 +250,23 @@ class ApiBithumbType:
 			except: pass
 
 
+	def __update_coin_info_table(self, coin_info_dict:dict) -> None:
+		self.__sql_query_queue.put(
+			f"INSERT INTO {self.__sql_main_db}.coin_info ("
+			+ "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
+			+ ") VALUES ("
+			+ f"'{coin_info_dict['coin_code']}',"
+			+ f"'{coin_info_dict['coin_name_kr']}',"
+			+ f"'{coin_info_dict['coin_name_en']}',"
+			+ f"'{coin_info_dict['coin_price']}',"
+			+ f"'{coin_info_dict['coin_amount']}' "
+			+ ") ON DUPLICATE KEY UPDATE "
+			+ f"coin_name_kr='{coin_info_dict['coin_name_kr']}',"
+			+ f"coin_name_en='{coin_info_dict['coin_name_en']}',"
+			+ f"coin_price='{coin_info_dict['coin_price']}',"
+			+ f"coin_amount='{coin_info_dict['coin_amount']}'"
+		)
+  
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		database_name = "Z_Coin" + coin_code.replace("/", "_")
 		raw_table_name = database_name + ".Raw" + dt.strftime("%Y%V")
@@ -376,7 +443,7 @@ class ApiBithumbType:
 				if msg_json["status"] != "0000":
 					status = msg_json["status"]
 					msg = msg_json["resmsg"]
-					self.__logger.InsertNormalLog(f"Fail msg : [ {status}:{msg} ]")
+					Util.InsertLog("ApiBithumb", "E", f"Fail msg : [ {status}:{msg} ]")
 
 			elif "type" in msg_json:
 				if msg_json["type"] == "transaction":
@@ -385,17 +452,17 @@ class ApiBithumbType:
 					Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook(msg_json)).start()
 
 		except Exception as e:
-			self.__logger.InsertErrorLog("Fail to process ws recv msg : " + e.__str__())
+			Util.InsertLog("ApiBithumb", "E", "Fail to process ws recv msg : " + e.__str__())
 	
 	def __on_ws_open(self, ws:WebSocketApp) -> None:
 		self.__ws_is_opened = True
 		
 		buf_dict = {}
-		for key, val in self.__ws_query_list_cur.items():
-			if val["coin_api_type"] in buf_dict:
-				buf_dict[val["coin_api_type"]].append(val["coin_api_coin_code"])
+		for ws_query in self.__ws_query_list:
+			if ws_query["coin_api_type"] in buf_dict:
+				buf_dict[ws_query["coin_api_type"]].append(ws_query["coin_api_coin_code"])
 			else:
-				buf_dict[val["coin_api_type"]] = [val["coin_api_coin_code"]]
+				buf_dict[ws_query["coin_api_type"]] = [ws_query["coin_api_coin_code"]]
 			
 		for key, val in buf_dict.items():
 			try:
@@ -406,16 +473,64 @@ class ApiBithumbType:
 				self.__ws_app.send(json.dumps(msg))
 
 			except Exception as e:
-				self.__logger.InsertErrorLog("Fail to process ws send msg : " + e.__str__())
+				Util.InsertLog("ApiBithumb", "E", f"Fail to process ws send msg [ Bithumb_WS | {e.__str__()} ]")
 
 			time.sleep(0.25)
 
-		self.__logger.InsertNormalLog("Opened bithumb websocket")
+		Util.InsertLog("ApiBithumb", "N", "Opened bithumb websocket [ Bithumb_WS ]")
 
 	def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
 		self.__ws_is_opened = False
-		self.__logger.InsertNormalLog("Closed bithumb websocket")
+  
+		while self.__ws_keep_connect == True:
+			time.sleep(1)
+			try:
+				self.__ws_app = WebSocketApp(
+					url = self.__WS_BASE_URL,
+					on_message= self.__on_ws_recv_message,
+					on_open= self.__on_ws_open,
+					on_close= self.__on_ws_close,
+					)
+				self.__ws_thread = Thread(
+					name="Bithumb_WS",
+					target=self.__ws_app.run_forever
+				)
+				self.__ws_is_opened = False
+				self.__ws_thread.daemon = True
+				self.__ws_thread.start()
+				self.__ws_keep_connect = True
+	
+				Util.InsertLog("ApiBithumb", "N", f"Reconnected bithumb websocket [ Bithumb_WS ]")
+				break
+	
+			except Exception as ex:
+				Util.InsertLog("ApiBithumb", "E", f"Fail to reconnect korea bithumb websocket [ Bithumb_WS | {ex.__str__()} ]")
+    
+		Util.InsertLog("ApiBithumb", "N", "Closed bithumb websocket [ Bithumb_WS ]")
 
+
+	def __sync_ws_query_list(self) -> None:
+		try:
+			select_query = "SELECT * FROM coin_last_ws_query"
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
+			cursor.execute(select_query)
+
+			last_query_list = cursor.fetchall()
+
+			temp_list = []
+			for info in last_query_list:
+				temp_list.append({
+					"coin_code" : info[1],
+					"coin_api_type" : info[2],
+					"coin_api_coin_code" : info[3]
+				})
+    
+			self.__ws_query_list = temp_list
+			self.__ws_app.close()
+
+		except: raise Exception("Fail to load last websocket query table")
+ 
 
 	##########################################################################
 
@@ -436,7 +551,7 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			self.__logger.InsertErrorLog(e.__str__())
+			Util.InsertLog("ApiBithumb", "E", e.__str__())
 			return []
 
 	def GetCoinList(self, cnt:int, offset:int = 0) -> list:
@@ -454,7 +569,7 @@ class ApiBithumbType:
 			return cursor.fetchall()
 		
 		except Exception as e:
-			self.__logger.InsertErrorLog(e.__str__())
+			Util.InsertLog("ApiBithumb", "E", e.__str__())
 			return []
 	
 
@@ -478,7 +593,7 @@ class ApiBithumbType:
 			return ret
 
 		except Exception as e:
-			self.__logger.InsertErrorLog(e.__str__())
+			Util.InsertLog("ApiBithumb", "E", e.__str__())
 			return []
 
 	def UpdateAllQuery(self) -> bool:
@@ -583,87 +698,19 @@ class ApiBithumbType:
 	def GetCurrentCollectingDateTime(self) -> DateTime:
 		return self.__ws_query_datetime
 
-	def StartCollecting(self) -> None:
+
+	def SyncDailyInfo(self) -> None:
 		try:
 			self.__ws_query_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
-			self.StopCollecting()
-			self.__sync_last_ws_query_table()
-			self.__create_websocket_app()
-
-		except Exception as e:
-			self.__logger.InsertErrorLog(e.__str__())
-
-	def CheckCollecting(self) -> None:
+			self.__sync_ws_query_list()
+		except Exception as ex:
+			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")
+   
+	def SyncWeeklyInfo(self) -> None:
 		try:
-			if self.__ws_is_opened == True: return
-			self.StopCollecting()
-			self.__create_websocket_app()
-
-		except Exception as e:
-			self.__logger.InsertErrorLog(e.__str__())
-
-	def StopCollecting(self) -> None:
-		if self.__ws_app != None and self.__ws_thread.is_alive():
-			self.__ws_app.close()
-			self.__ws_thread.join()
-	
-
-	def UpdateCoinInfo(self) -> None:
-		try:
-			# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
-			upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
-			upbit_rep_json = json.loads(upbit_rep.text)
-			code_kr_name_dict = {}
-			for data in upbit_rep_json:
-				try:
-					from_to = data["market"].split("-")
-					if from_to[0] != "KRW": continue
-					code_kr_name_dict[from_to[1]] = [data["korean_name"], data["english_name"]]
-				except:
-					continue
-
-			bithumb_rep = requests.get(url = "https://api.bithumb.com/public/ticker/ALL_KRW")
-			bithumb_rep_json = json.loads(bithumb_rep.text)
-			if bithumb_rep_json["status"] != "0000":
-				raise Exception("UPBIT REQUEST ERROR")
-
-			data_list = bithumb_rep_json["data"]
-			for key in data_list:
-				if key == "date": continue
-				
-				if key in code_kr_name_dict:
-					name_kr = code_kr_name_dict[key][0]
-					name_en = code_kr_name_dict[key][1]
-				else:
-					name_kr = key
-					name_en = key
-
-				val = data_list[key]
-				query_str = (
-					"INSERT INTO coin_info ("
-					+ "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
-					+ ") VALUES ("
-					+ "'" + key + "',"
-					+ "'" + name_kr + "',"
-					+ "'" + name_en + "',"
-					+ "'" + val["closing_price"] + "',"
-					+ "'" + val["acc_trade_value_24H"] + "' "
-					+ ") ON DUPLICATE KEY UPDATE "
-					+ "coin_name_kr='" + name_kr + "',"
-					+ "coin_name_en='" + name_en + "',"
-					+ "coin_price='" + val["closing_price"] + "',"
-					+ "coin_amount='" + val["acc_trade_value_24H"] + "'"
-				)
-				
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-
-				
-			self.__logger.InsertNormalLog("Success to update coin info")
-
-		except Exception as e: 
-			self.__logger.InsertErrorLog("Fail to update coin info : " + e.__str__())
+			self.__sync_coin_info_table()
+		except Exception as ex:
+			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for bithumb api [ {ex.__str__()} ] ")
 
 
 

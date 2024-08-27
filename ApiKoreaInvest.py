@@ -818,30 +818,29 @@ class ApiKoreaInvestType:
 			except: pass
 
 			try:
-				if rest_api_token["TOKEN_VAL"] == "":
-					api_url = "/oauth2/tokenP"
-					api_body = {
-						"grant_type" : "client_credentials",
-						"appkey" : rest_api_token["API_KEY"],
-						"appsecret" : rest_api_token["API_SECRET"],
-					}
-					response = requests.post (
-						url = self.__API_BASE_URL + api_url,
-						data = json.dumps(api_body),
-					)
+				api_url = "/oauth2/tokenP"
+				api_body = {
+					"grant_type" : "client_credentials",
+					"appkey" : rest_api_token["API_KEY"],
+					"appsecret" : rest_api_token["API_SECRET"],
+				}
+				response = requests.post (
+					url = self.__API_BASE_URL + api_url,
+					data = json.dumps(api_body),
+				)
 
-					rep_json = json.loads(response.text)
+				rep_json = json.loads(response.text)
 
-					rest_api_token["TOKEN_TYPE"] = rep_json["token_type"]
-					rest_api_token["TOKEN_VAL"] = rep_json["access_token"]
-					rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
-					rest_api_token["TOKEN_HEADER"] = {
-						"content-type" : "application/json; charset=utf-8",
-						"authorization" : rest_api_token["TOKEN_TYPE"] + " " + rest_api_token["TOKEN_VAL"],
-						"appkey" : rest_api_token["API_KEY"],
-						"appsecret" : rest_api_token["API_SECRET"],
-						"custtype" : "P"
-					}
+				rest_api_token["TOKEN_TYPE"] = rep_json["token_type"]
+				rest_api_token["TOKEN_VAL"] = rep_json["access_token"]
+				rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
+				rest_api_token["TOKEN_HEADER"] = {
+					"content-type" : "application/json; charset=utf-8",
+					"authorization" : rest_api_token["TOKEN_TYPE"] + " " + rest_api_token["TOKEN_VAL"],
+					"appkey" : rest_api_token["API_KEY"],
+					"appsecret" : rest_api_token["API_SECRET"],
+					"custtype" : "P"
+				}
 	
 			except: raise Exception("Fail to sync rest api token list")
 
@@ -1517,7 +1516,6 @@ class ApiKoreaInvestType:
    
 	def SyncWeeklyInfo(self) -> None:
 		try:
-			self.__sync_rest_api_token_list()
 			self.__sync_stock_info_table()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")

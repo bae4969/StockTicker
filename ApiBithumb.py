@@ -5,10 +5,8 @@ import pymysql
 import json
 import queue
 from threading import Thread
-import os
 import time
 from datetime import datetime as DateTime
-from datetime import timedelta
 
 
 class ApiBithumbType:
@@ -149,9 +147,6 @@ class ApiBithumbType:
 		self.__ws_query_list = []
 
 
-	##########################################################################
-
-
 	def __get_coin_name_dict(self) -> dict:
 		# 항목은 빗썸에서 한글 이름은 업비트에서 가져옴
 		upbit_rep = requests.get(url = "https://api.upbit.com/v1/market/all?isDetails=true")
@@ -163,9 +158,9 @@ class ApiBithumbType:
 				from_to = data["market"].split("-")
 				if from_to[0] != "KRW": continue
 				coin_name_dict[from_to[1]] = [
-        			data["korean_name"],
-           			data["english_name"],
-              	]
+					data["korean_name"],
+		   			data["english_name"],
+			  	]
 			except:
 				continue
 
@@ -189,36 +184,6 @@ class ApiBithumbType:
    
 		return coin_price_dict
 
-
-	def __sync_coin_info_table(self) -> None:
-		try:
-			coin_name_dict = self.__get_coin_name_dict()
-			coin_price_dict = self.__get_coin_price_dict()
-   
-			for key, price_data in coin_price_dict.items():
-				if key in coin_name_dict:
-					name_kr = coin_name_dict[key][0]
-					name_en = coin_name_dict[key][1]
-				else:
-					name_kr = key
-					name_en = key
-    
-				coin_info_dict = {
-					'coin_code' : key,
-					'coin_name_kr' : name_kr,
-					'coin_name_en' : name_en,
-					'coin_price' : price_data[0],
-					'coin_amount' : price_data[1]
-				}
-    
-				self.__update_coin_info_table(coin_info_dict)
-
-				
-			Util.InsertLog("ApiBithumb", "N", "Success to update coin info")
-
-		except Exception as e: 
-			Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
- 
 
 	##########################################################################
  
@@ -505,10 +470,42 @@ class ApiBithumbType:
 	
 			except Exception as ex:
 				Util.InsertLog("ApiBithumb", "E", f"Fail to reconnect korea bithumb websocket [ Bithumb_WS | {ex.__str__()} ]")
-    
+	
 		Util.InsertLog("ApiBithumb", "N", "Closed bithumb websocket [ Bithumb_WS ]")
 
 
+	##########################################################################
+
+
+	def __sync_coin_info_table(self) -> None:
+		try:
+			coin_name_dict = self.__get_coin_name_dict()
+			coin_price_dict = self.__get_coin_price_dict()
+   
+			for key, price_data in coin_price_dict.items():
+				if key in coin_name_dict:
+					name_kr = coin_name_dict[key][0]
+					name_en = coin_name_dict[key][1]
+				else:
+					name_kr = key
+					name_en = key
+	
+				coin_info_dict = {
+					'coin_code' : key,
+					'coin_name_kr' : name_kr,
+					'coin_name_en' : name_en,
+					'coin_price' : price_data[0],
+					'coin_amount' : price_data[1]
+				}
+	
+				self.__update_coin_info_table(coin_info_dict)
+
+				
+			Util.InsertLog("ApiBithumb", "N", "Success to update coin info")
+
+		except Exception as e: 
+			Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
+ 
 	def __sync_ws_query_list(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
@@ -525,7 +522,7 @@ class ApiBithumbType:
 					"coin_api_type" : info[2],
 					"coin_api_coin_code" : info[3]
 				})
-    
+	
 			self.__ws_query_list = temp_list
 			self.__ws_app.close()
 
@@ -533,166 +530,6 @@ class ApiBithumbType:
  
 
 	##########################################################################
-
-
-	def FindCoin(self, name:str) -> list:
-		try:
-			query_str = (
-				"SELECT coin_code, coin_name_kr, coin_name_en "
-				+ "FROM coin_info WHERE "
-				+ "coin_name_kr LIKE '%" + name + "%' or "
-				+ "coin_name_en LIKE '%" + name + "%' "
-				+ "ORDER BY coin_order ASC"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-
-			return cursor.fetchall()
-		
-		except Exception as e:
-			Util.InsertLog("ApiBithumb", "E", e.__str__())
-			return []
-
-	def GetCoinList(self, cnt:int, offset:int = 0) -> list:
-		try:
-			query_str = (
-				"SELECT coin_code, coin_name_kr, coin_name_en "
-				+ "FROM coin_info "
-				+ "ORDER BY coin_order ASC "
-				+ "LIMIT " + str(offset) + ", " + str(cnt)
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-
-			return cursor.fetchall()
-		
-		except Exception as e:
-			Util.InsertLog("ApiBithumb", "E", e.__str__())
-			return []
-	
-
-	def ClearAllQuery(self) -> None:
-		self.__ws_query_list_buf.clear()
-
-	def GetInsertedQueryList(self) -> list:
-		try:
-			ret = []
-			for key, val in self.__ws_query_list_buf.items():
-				query_str = (
-					"SELECT coin_code, coin_name_kr, coin_name_en "
-					+ "FROM coin_info WHERE "
-					+ "coin_code='" + val["coin_code"] + "'"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-				ret.append(cursor.fetchall()[0])
-
-			return ret
-
-		except Exception as e:
-			Util.InsertLog("ApiBithumb", "E", e.__str__())
-			return []
-
-	def UpdateAllQuery(self) -> bool:
-		try:
-			delete_list_query = "DELETE FROM coin_last_ws_query"
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(delete_list_query)
-
-			varified_list = {}
-			for key, val in self.__ws_query_list_buf.items():
-				try:
-					insert_list_query = "INSERT INTO coin_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val["coin_code"], val["coin_api_type"], val["coin_api_coin_code"])
-					cursor.execute(insert_list_query)
-					varified_list[key] = val
-				except:
-					continue
-
-			self.__ws_query_list_buf = varified_list
-
-			return True
-
-		except:
-			return False
-
-
-	def AddCoinExecutionQuery(self, coin_code:str) -> int:
-		try:
-			coin_code = coin_code.upper()
-			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
-				return len(self.__ws_query_list_buf)
-			
-			query_str = (
-				"SELECT COUNT(*) "
-				+ "FROM coin_info WHERE "
-				+ "coin_code='" + coin_code +"'"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-			sql_ret = cursor.fetchall()
-			if int(sql_ret[0][0]) == 0: return -500
-		
-			api_stock_code = coin_code + "_KRW"
-
-			self.__ws_query_list_buf["EX_" + coin_code] = {
-				"coin_code" : coin_code,
-				"coin_api_type" : "transaction",
-				"coin_api_coin_code" : api_stock_code
-			}
-
-			return len(self.__ws_query_list_buf)
-		
-		except:
-			return -400
-
-	def AddCoinOrderbookQuery(self, coin_code:str) -> int:
-		try:
-			coin_code = coin_code.upper()
-			if self.__ws_query_list_buf.__contains__("EX_" + coin_code):
-				return len(self.__ws_query_list_buf)
-			
-			query_str = (
-				"SELECT COUNT(*) "
-				+ "FROM coin_info WHERE "
-				+ "coin_code='" + coin_code +"'"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-			sql_ret = cursor.fetchall()
-			if int(sql_ret[0][0]) == 0: return -501
-		
-			api_stock_code = coin_code + "_KRW"
-
-			self.__ws_query_list_buf["OB_" + coin_code] ={
-				"coin_code" : coin_code,
-				"coin_api_type" : "orderbooksnapshot",
-				"coin_api_coin_code" : api_stock_code
-			}
-
-			return len(self.__ws_query_list_buf)
-		
-		except:
-			return -400
-
-	def DelCoinExecutionQuery(self, coin_code:str) -> None:
-		try:
-			coin_code = coin_code.upper()
-			del self.__ws_query_list_buf["EX_" + coin_code]
-		except:
-			pass
-
-	def DelCoinOrderbookQuery(self, coin_code:str) -> None:
-		try:
-			coin_code = coin_code.upper()
-			del self.__ws_query_list_buf["OB_" + coin_code]
-		except:
-			pass
 
 
 	def GetCurrentCollectingDateTime(self) -> DateTime:

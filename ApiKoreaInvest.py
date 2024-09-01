@@ -4,7 +4,7 @@ from websocket import WebSocketApp
 import pymysql
 import json
 import queue
-from threading import Lock, Thread, local
+from threading import Thread
 import os
 import pandas as pd
 import urllib.request
@@ -13,7 +13,6 @@ import glob
 import zipfile
 import time
 from datetime import datetime as DateTime
-from datetime import timedelta
 
 
 def GetKrQueryCount(query_list:dict) -> int:
@@ -234,9 +233,6 @@ class ApiKoreaInvestType:
 		return 20 * len(self.__api_key_list)
 
 
-	##########################################################################
-
-
 	def __get_kospi_stock_list(self) -> list:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip", "./temp/kospi_code.zip")
@@ -438,75 +434,6 @@ class ApiKoreaInvestType:
 
 		return df[df["Security type"] == 2]["Symbol"].tolist()
 	
-	
-	def __sync_stock_info_table(self) -> None:
-		try:
-			stock_code_list = {
-				"KOSPI" : self.__get_kospi_stock_list(),
-				"KOSDAQ" : self.__get_kosdaq_stock_list(),
-				"KONEX" : self.__get_konex_stock_list(),
-				"NASDAQ" : self.__get_nasdaq_stock_list(),
-				"NYSE" : self.__get_nyse_stock_list(),
-				"AMEX" : self.__get_amex_stock_list(),
-			}
-   
-			temp_market_code_list = [[] for _ in range(len(self.__rest_api_token_list))]
-			token_idx = 0
-			for stock_market, stock_codes in stock_code_list.items():
-				for stock_code in stock_codes:
-					temp_market_code_list[token_idx].append([stock_market, stock_code])
-					token_idx += 1
-					if token_idx >= len(self.__rest_api_token_list):
-						token_idx = 0
-   
-			def kernel_func(rest_api_token:dict, stock_market_code_list:list) -> None:
-				for stock_market_code in stock_market_code_list:
-					try:
-						min_micro = 1000000. / 20
-						start_dt = DateTime.now()
-						stock_market = stock_market_code[0]
-						stock_code = stock_market_code[1]
-						rest_api_token_header = rest_api_token["TOKEN_HEADER"]
-      
-						if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
-							min_micro *= 1
-							stock_info_dict = self.__rest_api_kr_stock_info_dict(rest_api_token_header, stock_code, stock_market)
-							self.__update_stock_info_table(stock_info_dict)
-						elif stock_market in ["NASDAQ", "NYSE", "AMEX"]:
-							min_micro *= 2
-							stock_info_dict = self.__rest_api_ex_stock_info_dict(rest_api_token_header, stock_code, stock_market)
-							self.__update_stock_info_table(stock_info_dict)
-						else:
-							continue
-
-						diff_micro = (DateTime.now() - start_dt).microseconds
-						if min_micro > diff_micro:
-							time.sleep((min_micro - diff_micro) / 1000000.)
-       
-					except Exception as e:
-						Util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
-
-      
-			temp_thread_list = []
-			for idx in range(len(self.__rest_api_token_list)):
-				t_thread = Thread(
-					name= f"KoreaInvest_Update_Stock_Info_{idx}",
-        			target= kernel_func,
-					args=(self.__rest_api_token_list[idx], temp_market_code_list[idx])
-           		)
-				t_thread.daemon = True
-				t_thread.start()
-				temp_thread_list.append(t_thread)
-
-			for temp_thread in temp_thread_list:
-				temp_thread.join()
-						
-
-			Util.InsertLog("ApiKoreaInvest", "N", "Success to update stock info")
-
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
-
 
 	##########################################################################
  
@@ -793,73 +720,6 @@ class ApiKoreaInvestType:
 			raise Exception("[ ex stock info ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
 
-	def __sync_rest_api_token_list(self) -> None:
-		for rest_api_token in self.__rest_api_token_list:
-			try:
-				remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).seconds
-				if 43200 < remain_sec and remain_sec < 86220 :
-					api_url = "/oauth2/revokeP"
-					api_body = {
-						"grant_type" : "client_credentials",
-						"appkey" : rest_api_token["API_KEY"],
-						"appsecret" : rest_api_token["API_SECRET"],
-						"token" : rest_api_token["TOKEN_VAL"]
-					}
-					response = requests.post (
-						url = self.__API_BASE_URL + api_url,
-						data = json.dumps(api_body),
-					)
-	
-					rest_api_token["TOKEN_TYPE"] = ""
-					rest_api_token["TOKEN_VAL"] = ""
-					rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.min
-					rest_api_token["TOKEN_HEADER"] = {}
-	
-			except: pass
-
-			try:
-				api_url = "/oauth2/tokenP"
-				api_body = {
-					"grant_type" : "client_credentials",
-					"appkey" : rest_api_token["API_KEY"],
-					"appsecret" : rest_api_token["API_SECRET"],
-				}
-				response = requests.post (
-					url = self.__API_BASE_URL + api_url,
-					data = json.dumps(api_body),
-				)
-
-				rep_json = json.loads(response.text)
-
-				rest_api_token["TOKEN_TYPE"] = rep_json["token_type"]
-				rest_api_token["TOKEN_VAL"] = rep_json["access_token"]
-				rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
-				rest_api_token["TOKEN_HEADER"] = {
-					"content-type" : "application/json; charset=utf-8",
-					"authorization" : rest_api_token["TOKEN_TYPE"] + " " + rest_api_token["TOKEN_VAL"],
-					"appkey" : rest_api_token["API_KEY"],
-					"appsecret" : rest_api_token["API_SECRET"],
-					"custtype" : "P"
-				}
-	
-			except: raise Exception("Fail to sync rest api token list")
-
-		try:
-			file_data = {}
-			for rest_api_token in self.__rest_api_token_list:
-				file_data[rest_api_token["API_KEY"]] = {
-					"TOKEN_TYPE" : rest_api_token["TOKEN_TYPE"],
-					"TOKEN_VAL" : rest_api_token["TOKEN_VAL"],
-					"TOKEN_EXPIRED_DATETIME" : rest_api_token["TOKEN_EXPIRED_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
-				}
-
-			file = open("./doc/last_token_info.dat", 'w')
-			file.write(file_data.__str__().replace("'", "\""))
-			file.close()
-
-		except: Util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
-    
-
 	##########################################################################
 
 
@@ -1132,6 +992,143 @@ class ApiKoreaInvestType:
 			break
 
 
+	##########################################################################
+
+
+	def __sync_rest_api_token_list(self) -> None:
+		for rest_api_token in self.__rest_api_token_list:
+			try:
+				remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).seconds
+				if 43200 < remain_sec and remain_sec < 86220 :
+					api_url = "/oauth2/revokeP"
+					api_body = {
+						"grant_type" : "client_credentials",
+						"appkey" : rest_api_token["API_KEY"],
+						"appsecret" : rest_api_token["API_SECRET"],
+						"token" : rest_api_token["TOKEN_VAL"]
+					}
+					response = requests.post (
+						url = self.__API_BASE_URL + api_url,
+						data = json.dumps(api_body),
+					)
+	
+					rest_api_token["TOKEN_TYPE"] = ""
+					rest_api_token["TOKEN_VAL"] = ""
+					rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.min
+					rest_api_token["TOKEN_HEADER"] = {}
+	
+			except: pass
+
+			try:
+				api_url = "/oauth2/tokenP"
+				api_body = {
+					"grant_type" : "client_credentials",
+					"appkey" : rest_api_token["API_KEY"],
+					"appsecret" : rest_api_token["API_SECRET"],
+				}
+				response = requests.post (
+					url = self.__API_BASE_URL + api_url,
+					data = json.dumps(api_body),
+				)
+
+				rep_json = json.loads(response.text)
+
+				rest_api_token["TOKEN_TYPE"] = rep_json["token_type"]
+				rest_api_token["TOKEN_VAL"] = rep_json["access_token"]
+				rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.strptime(rep_json["access_token_token_expired"], "%Y-%m-%d %H:%M:%S")
+				rest_api_token["TOKEN_HEADER"] = {
+					"content-type" : "application/json; charset=utf-8",
+					"authorization" : rest_api_token["TOKEN_TYPE"] + " " + rest_api_token["TOKEN_VAL"],
+					"appkey" : rest_api_token["API_KEY"],
+					"appsecret" : rest_api_token["API_SECRET"],
+					"custtype" : "P"
+				}
+	
+			except: raise Exception("Fail to sync rest api token list")
+
+		try:
+			file_data = {}
+			for rest_api_token in self.__rest_api_token_list:
+				file_data[rest_api_token["API_KEY"]] = {
+					"TOKEN_TYPE" : rest_api_token["TOKEN_TYPE"],
+					"TOKEN_VAL" : rest_api_token["TOKEN_VAL"],
+					"TOKEN_EXPIRED_DATETIME" : rest_api_token["TOKEN_EXPIRED_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
+				}
+
+			file = open("./doc/last_token_info.dat", 'w')
+			file.write(file_data.__str__().replace("'", "\""))
+			file.close()
+
+		except: Util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
+    
+	def __sync_stock_info_table(self) -> None:
+		try:
+			stock_code_list = {
+				"KOSPI" : self.__get_kospi_stock_list(),
+				"KOSDAQ" : self.__get_kosdaq_stock_list(),
+				"KONEX" : self.__get_konex_stock_list(),
+				"NASDAQ" : self.__get_nasdaq_stock_list(),
+				"NYSE" : self.__get_nyse_stock_list(),
+				"AMEX" : self.__get_amex_stock_list(),
+			}
+   
+			temp_market_code_list = [[] for _ in range(len(self.__rest_api_token_list))]
+			token_idx = 0
+			for stock_market, stock_codes in stock_code_list.items():
+				for stock_code in stock_codes:
+					temp_market_code_list[token_idx].append([stock_market, stock_code])
+					token_idx += 1
+					if token_idx >= len(self.__rest_api_token_list):
+						token_idx = 0
+   
+			def kernel_func(rest_api_token:dict, stock_market_code_list:list) -> None:
+				for stock_market_code in stock_market_code_list:
+					try:
+						min_micro = 1000000. / 20
+						start_dt = DateTime.now()
+						stock_market = stock_market_code[0]
+						stock_code = stock_market_code[1]
+						rest_api_token_header = rest_api_token["TOKEN_HEADER"]
+      
+						if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
+							min_micro *= 1
+							stock_info_dict = self.__rest_api_kr_stock_info_dict(rest_api_token_header, stock_code, stock_market)
+							self.__update_stock_info_table(stock_info_dict)
+						elif stock_market in ["NASDAQ", "NYSE", "AMEX"]:
+							min_micro *= 2
+							stock_info_dict = self.__rest_api_ex_stock_info_dict(rest_api_token_header, stock_code, stock_market)
+							self.__update_stock_info_table(stock_info_dict)
+						else:
+							continue
+
+						diff_micro = (DateTime.now() - start_dt).microseconds
+						if min_micro > diff_micro:
+							time.sleep((min_micro - diff_micro) / 1000000.)
+       
+					except Exception as e:
+						Util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
+
+      
+			temp_thread_list = []
+			for idx in range(len(self.__rest_api_token_list)):
+				t_thread = Thread(
+					name= f"KoreaInvest_Update_Stock_Info_{idx}",
+        			target= kernel_func,
+					args=(self.__rest_api_token_list[idx], temp_market_code_list[idx])
+           		)
+				t_thread.daemon = True
+				t_thread.start()
+				temp_thread_list.append(t_thread)
+
+			for temp_thread in temp_thread_list:
+				temp_thread.join()
+						
+
+			Util.InsertLog("ApiKoreaInvest", "N", "Success to update stock info")
+
+		except Exception as e:
+			Util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
+
 	def __sync_ws_query_list(self) -> None:
 		try:
 			if self.__ws_query_type == "KR":
@@ -1188,319 +1185,6 @@ class ApiKoreaInvestType:
 
 	##########################################################################
 	
-
-	def FindStock(self, name:str) -> list:
-		try:
-			query_str = (
-				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
-				+ "FROM stock_info WHERE "
-				+ "stock_name_kr LIKE '%" + name + "%' or "
-				+ "stock_name_en LIKE '%" + name + "%' "
-				+ "ORDER BY stock_capitalization DESC"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-
-			return cursor.fetchall()
-		
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-			return []
-
-	def FindKrStock(self, name:str) -> list:
-			try:
-				query_str = (
-					"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
-					+ "FROM stock_info WHERE ("
-					+ "stock_market LIKE 'KOSPI%' or "
-					+ "stock_market LIKE 'KOSDAQ%' or "
-					+ "stock_market LIKE 'KONEX%') "
-					+ "AND ("
-					+ "stock_name_kr LIKE '%" + name + "%' or "
-					+ "stock_name_en LIKE '%" + name + "%')"
-					+ "ORDER BY stock_capitalization DESC"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-
-				return cursor.fetchall()
-			
-			except Exception as e:
-				Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-				return []
-
-	def FindUsStock(self, name:str) -> list:
-			try:
-				query_str = (
-					"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
-					+ "FROM stock_info WHERE ("
-					+ "stock_market LIKE 'NYSE%' or "
-					+ "stock_market LIKE 'NASDAQ%') "
-					+ "AND ("
-					+ "stock_name_kr LIKE '%" + name + "%' or "
-					+ "stock_name_en LIKE '%" + name + "%')"
-					+ "ORDER BY stock_capitalization DESC"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-
-				return cursor.fetchall()
-			
-			except Exception as e:
-				Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-				return []
-
-	def GetKrStockList(self, cnt:int, offset:int = 0) -> list:
-		try:
-			query_str = (
-				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
-				+ "FROM stock_info WHERE "
-				+ "stock_market LIKE 'KOSPI%' or "
-				+ "stock_market LIKE 'KOSDAQ%' or "
-				+ "stock_market LIKE 'KONEX%' "
-				+ "ORDER BY stock_capitalization DESC "
-				+ "LIMIT " + str(offset) + ", " + str(cnt)
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-
-			return cursor.fetchall()
-		
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-			return []
-	
-	def GetUsStockList(self, cnt:int, offset:int = 0) -> list:
-		try:
-			query_str = (
-				"SELECT stock_code, stock_name_kr, stock_name_en, stock_market "
-				+ "FROM stock_info WHERE "
-				+ "stock_market LIKE 'NYSE%' or "
-				+ "stock_market LIKE 'NASDAQ%' "
-				+ "ORDER BY stock_capitalization DESC "
-				+ "LIMIT " + str(offset) + ", " + str(cnt)
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(query_str)
-			
-			return cursor.fetchall()
-		
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-			return []
-
-
-	def ClearAllQuery(self) -> None:
-		self.__ws_query_list_buf.clear()
-
-	def GetInsertedKrQueryList(self) -> list:
-		try:
-			ret = []
-			for key, val in self.__ws_query_list_buf.items():
-				if (val["stock_market"].find("KOSPI") == -1 and
-					val["stock_market"].find("KOSDAQ") == -1 and
-					val["stock_market"].find("KONEX") == -1):
-					continue
-
-				query_str = (
-					"SELECT stock_code, stock_name_kr, stock_name_en "
-					+ "FROM stock_info WHERE "
-					+ "stock_code='" + val["stock_code"] + "'"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-				ret.append(cursor.fetchall()[0])
-
-			return ret
-
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-			return []
-		
-	def GetInsertedUsQueryList(self) -> list:
-		try:
-			ret = []
-			for key, val in self.__ws_query_list_buf.items():
-				if (val["stock_market"].find("NYSE") == -1 and
-					val["stock_market"].find("NASDAQ") == -1):
-					continue
-
-				query_str = (
-					"SELECT stock_code, stock_name_kr, stock_name_en "
-					+ "FROM stock_info WHERE "
-					+ "stock_code='" + val["stock_code"] + "'"
-				)
-				self.__sql_common_connection.ping(reconnect=True)
-				cursor = self.__sql_common_connection.cursor()
-				cursor.execute(query_str)
-				ret.append(cursor.fetchall()[0])
-
-			return ret
-
-		except Exception as e:
-			Util.InsertLog("ApiKoreaInvest", "E", e.__str__())
-			return []
-		
-	def UpdateAllQuery(self) -> bool:
-		try:
-			delete_list_query = "DELETE FROM stock_last_ws_query"
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(delete_list_query)
-			
-			varified_list = {}
-			for key, val in self.__ws_query_list_buf.items():
-				try:
-					insert_list_query = "INSERT INTO stock_last_ws_query VALUES ('%s','%s','%s','%s')"%(key, val["stock_code"], val["stock_api_type"], val["stock_api_stock_code"])
-					cursor.execute(insert_list_query)
-					varified_list[key] = val
-				except:
-					continue
-
-			self.__ws_query_list_buf = varified_list
-
-			return True
-
-		except:
-			return False
-
-
-	def AddStockExecutionQuery(self, stock_code:str) -> int:
-		try:
-			stock_code = stock_code.upper()
-			if self.__ws_query_list_buf.__contains__("EX_" + stock_code):
-				stock_market = self.__ws_query_list_buf["EX_" + stock_code]["stock_market"]
-				if (stock_market == "NYSE" or
-					stock_market == "NASDAQ" or
-					stock_market == "AMEX"):
-					return GetUsQueryCount(self.__ws_query_list_buf)
-				else:
-					return GetKrQueryCount(self.__ws_query_list_buf)
-
-			exist_query_str = (
-				"SELECT stock_market "
-				+ "FROM stock_info WHERE "
-				+ "stock_code='" + stock_code +"'"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(exist_query_str)
-			exist_ret = cursor.fetchall()
-			if len(exist_ret) == 0: return -500
-			
-			stock_market = exist_ret[0][0]
-			if stock_market == "NYSE":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSCNT0"
-				api_stock_code = "DNYS" + stock_code
-			elif stock_market == "NASDAQ":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSCNT0"
-				api_stock_code = "DNAS" + stock_code
-			elif stock_market == "AMEX":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSCNT0"
-				api_stock_code = "DAMS" + stock_code
-			else:
-				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "H0STCNT0"
-				api_stock_code = stock_code
-
-			self.__ws_query_list_buf["EX_" + stock_code] = {
-					"stock_code" : stock_code,
-					"stock_market" : stock_market,
-					"stock_api_type" : api_code,
-					"stock_api_stock_code" : api_stock_code
-			}
-
-			if (stock_market == "NYSE" or
-				stock_market == "NASDAQ" or
-				stock_market == "AMEX"):
-				return GetUsQueryCount(self.__ws_query_list_buf)
-			else:
-				return GetKrQueryCount(self.__ws_query_list_buf)
-		
-		except:
-			return -400
-
-	def AddStockOrderbookQuery(self, stock_code:str) -> int:
-		try:
-			stock_code = stock_code.upper()
-			if self.__ws_query_list_buf.__contains__("OB_" + stock_code):
-				stock_market = self.__ws_query_list_buf["OB_" + stock_code]["stock_market"]
-				if (stock_market == "NYSE" or
-					stock_market == "NASDAQ" or
-					stock_market == "AMEX"):
-					return GetUsQueryCount(self.__ws_query_list_buf)
-				else:
-					return GetKrQueryCount(self.__ws_query_list_buf)
-			
-			exist_query_str = (
-				"SELECT stock_market "
-				+ "FROM stock_info WHERE "
-				+ "stock_code='" + stock_code +"'"
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(exist_query_str)
-			exist_ret = cursor.fetchall()
-			if len(exist_ret) == 0: return -500
-
-			stock_market = exist_ret[0][0]
-			if stock_market == "NYSE":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSASP0"
-				api_stock_code = "DNYS" + stock_code
-			elif stock_market == "NASDAQ":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSASP0"
-				api_stock_code = "DNAS" + stock_code
-			elif stock_market == "AMEX":
-				if GetUsQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "HDFSASP0"
-				api_stock_code = "DAMS" + stock_code
-			else:
-				if GetKrQueryCount(self.__ws_query_list_buf) >= self.__get_websocket_query_limit(): return -501
-				api_code = "H0STASP0"
-				api_stock_code = stock_code
-
-			self.__ws_query_list_buf["OB_" + stock_code] = {
-					"stock_code" : stock_code,
-					"stock_market" : stock_market,
-					"stock_api_type" : api_code,
-					"stock_api_stock_code" : api_stock_code
-			}
-
-			if (stock_market == "NYSE" or
-				stock_market == "NASDAQ" or
-				stock_market == "AMEX"):
-				return GetUsQueryCount(self.__ws_query_list_buf)
-			else:
-				return GetKrQueryCount(self.__ws_query_list_buf)
-		
-		except:
-			return -400
-		
-	def DelStockExecutionQuery(self, stock_code:str) -> None:
-		try:
-			stock_code = stock_code.upper()
-			del self.__ws_query_list_buf["EX_" + stock_code]
-		except:
-			pass
-
-	def DelStockOrderbookQuery(self, stock_code:str) -> None:
-		try:
-			stock_code = stock_code.upper()
-			del self.__ws_query_list_buf["OB_" + stock_code]
-		except:
-			pass
-
 
 	def GetCurrentCollectingType(self) -> str:
 		return self.__ws_query_type

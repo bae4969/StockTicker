@@ -15,25 +15,6 @@ import time
 from datetime import datetime as DateTime
 
 
-def GetKrQueryCount(query_list:dict) -> int:
-	cnt = 0
-	for key, val in query_list.items():
-		if (val["stock_market"].find("KOSPI") != -1 or
-			val["stock_market"].find("KOSDAQ") != -1 or
-			val["stock_market"].find("KONEX") != -1):
-			cnt += 1
-
-	return cnt
-def GetUsQueryCount(query_list:dict) -> int:
-	cnt = 0
-	for key, val in query_list.items():
-		if (val["stock_market"].find("NYSE") != -1 or
-			val["stock_market"].find("NASDAQ") != -1 or
-			val["stock_market"].find("AMEX") != -1):
-			cnt += 1
-
-	return cnt
-
 class ApiKoreaInvestType:
 	__sql_main_db:str
 	__sql_common_connection:pymysql.Connection = None
@@ -49,7 +30,6 @@ class ApiKoreaInvestType:
 	__ws_app_info_list:list = []
 
 	__ws_query_type:str = ""
-	__ws_query_list_buf:dict = {}
 	__ws_ex_excution_last_volume:dict = {}
 
 
@@ -79,7 +59,6 @@ class ApiKoreaInvestType:
   
 		self.__create_stock_info_table()
 		self.__create_last_ws_query_table()
-		self.__load_last_ws_query_table()
 		self.__start_dequeue_sql_query()
   
 		self.__create_rest_api_token_list()
@@ -134,32 +113,6 @@ class ApiKoreaInvestType:
 			cursor.execute(create_table_query)
 
 		except: raise Exception("Fail to create last websocket query table")
-
-	def __load_last_ws_query_table(self) -> None:
-		try:
-			select_query = (
-				"SELECT "
-				+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
-				+ "FROM stock_last_ws_query AS L "
-				+ "JOIN stock_info AS I "
-				+ "ON L.stock_code = I.stock_code "
-			)
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(select_query)
-
-			last_query_list = cursor.fetchall()
-			self.__ws_query_list_buf = {}
-			for info in last_query_list:
-				self.__ws_query_list_buf[info[0]] = {
-					"stock_code" : info[1],
-					"stock_market" : info[2],
-					"stock_api_type" : info[3],
-					"stock_api_stock_code" : info[4]
-				}
-
-		except: raise Exception("Fail to load last websocket query table")
-
 
 	def __create_rest_api_token_list(self) -> None:
 		file = open("./doc/last_token_info.dat", 'r')
@@ -224,13 +177,6 @@ class ApiKoreaInvestType:
 				"WS_KEEP_CONNECT" : True,
 				"WS_QUERY_LIST" : [],
 			})
-
-
-	def __get_websocket_query_limit(self) -> int:
-		return 40 * len(self.__api_key_list)
-
-	def __get_rest_api_limit(self) -> int:
-		return 20 * len(self.__api_key_list)
 
 
 	def __get_kospi_stock_list(self) -> list:
@@ -500,7 +446,7 @@ class ApiKoreaInvestType:
 		non_amount_str = str(price * non_volume)
 		ask_amount_str = str(price * ask_volume)
 		bid_amount_str = str(price * bid_volume)
-	
+ 
 		self.__sql_query_queue.put(
 			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
 			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"

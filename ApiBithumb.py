@@ -27,7 +27,6 @@ class ApiBithumbType:
 	__ws_query_list = []
 
 	__ws_query_datetime = DateTime.min
-	__ws_query_list_buf = {}
 
 
 	##########################################################################
@@ -55,7 +54,6 @@ class ApiBithumbType:
 
 		self.__create_coin_info_table()
 		self.__create_last_ws_query_table()
-		self.__load_last_ws_query_table()
 		self.__start_dequeue_sql_query()
   
 		self.__create_ws_app_info()
@@ -110,25 +108,7 @@ class ApiBithumbType:
 
 		except: raise Exception("Fail to create last websocket query table")
 
-	def __load_last_ws_query_table(self) -> None:
-		try:
-			select_query = "SELECT * FROM coin_last_ws_query"
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(select_query)
 
-			last_query_list = cursor.fetchall()
-			self.__ws_query_list_buf = {}
-			for info in last_query_list:
-				self.__ws_query_list_buf[info[0]] = {
-					"coin_code" : info[1],
-					"coin_api_type" : info[2],
-					"coin_api_coin_code" : info[3]
-				}
-
-		except: raise Exception("Fail to load last websocket query table")
-	
- 
 	def __create_ws_app_info(self) -> None:
 		self.__ws_app = WebSocketApp(
 			url = self.__WS_BASE_URL,

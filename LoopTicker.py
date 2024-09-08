@@ -33,7 +33,7 @@ time.sleep(2)
 while True:
     try:
         kr_min_datetime = DateTime.now().replace(hour=8, minute=0, second=0)
-        kr_max_datetime = DateTime.now().replace(hour=15, minute=30, second=0)
+        kr_max_datetime = DateTime.now().replace(hour=16, minute=0, second=0)
         if kr_min_datetime < DateTime.now() < kr_max_datetime:
             target_market = "KR"
         else:

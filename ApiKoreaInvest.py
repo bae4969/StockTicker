@@ -13,6 +13,7 @@ import glob
 import zipfile
 import time
 from datetime import datetime as DateTime
+from datetime import timedelta as TimeDelta
 
 
 class ApiKoreaInvestType:
@@ -28,6 +29,7 @@ class ApiKoreaInvestType:
 
 	__rest_api_token_list:list = []
 	__ws_app_info_list:list = []
+ 
 
 	__ws_query_type:str = ""
 	__ws_ex_excution_last_volume:dict = {}
@@ -434,8 +436,8 @@ class ApiKoreaInvestType:
 
 	def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		database_name = "Z_Stock" + stock_code.replace("/", "_")
-		raw_table_name = database_name + ".Raw" + dt.strftime("%Y%V")
-		candle_table_name = database_name + ".Candle" + dt.strftime("%Y%V")
+		raw_table_name = database_name + ".Raw" + dt.strftime("%Y")
+		candle_table_name = database_name + ".Candle" + dt.strftime("%Y")
 
 		datetime_00_min = dt
 		datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -447,35 +449,6 @@ class ApiKoreaInvestType:
 		ask_amount_str = str(price * ask_volume)
 		bid_amount_str = str(price * bid_volume)
  
-		self.__sql_query_queue.put(
-			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
-			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"
-		)
-		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS " + raw_table_name + " ("
-			+ "execution_datetime DATETIME NOT NULL,"
-			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
-		)
-		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS " + candle_table_name + " ("
-			+ "execution_datetime DATETIME NOT NULL,"
-			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "PRIMARY KEY (execution_datetime) USING BTREE"
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
-		)
 		self.__sql_query_queue.put(
 			"INSERT INTO " + raw_table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
@@ -539,6 +512,55 @@ class ApiKoreaInvestType:
 		cursor = self.__sql_common_connection.cursor()
 		cursor.execute(create_orderbook_table_query_str)
 		cursor.execute(insert_orderbook_table_query_str)
+
+	
+	def __create_stock_execution_table(self, stock_code:str, year:int):
+		database_name = "Z_Stock" + stock_code.replace("/", "_")
+		raw_table_name = f"{database_name}.Raw{year:04d}"
+		candle_table_name = f"{database_name}.Candle{year:04d}"
+	 
+		partition_str = f" PARTITION BY RANGE (YEARWEEK(execution_datetime)) ("
+		for i in range(1, 53):
+			partition_str += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
+		partition_str += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+
+		create_database_query = f"CREATE DATABASE IF NOT EXISTS {database_name} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'" 
+		create_ex_raw_table_query = (
+			f"""CREATE TABLE IF NOT EXISTS {raw_table_name} (
+			execution_datetime DATETIME NOT NULL,
+			execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' 
+			) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"""
+		)
+		create_ex_candle_table_query = (
+			f"""CREATE TABLE IF NOT EXISTS {candle_table_name} (
+			execution_datetime DATETIME NOT NULL,
+			execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			PRIMARY KEY (execution_datetime) USING BTREE
+			) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"""
+		)
+  
+		create_ex_raw_table_query += partition_str
+		create_ex_candle_table_query += partition_str
+  
+		self.__sql_query_queue.put(create_database_query)
+		self.__sql_query_queue.put(create_ex_raw_table_query)
+		self.__sql_query_queue.put(create_ex_candle_table_query)
+		
+	def __create_stock_orderbook_table(self, stock_code:str, year:int):
+		# TODO
+		return
 
 
 	##########################################################################
@@ -694,7 +716,7 @@ class ApiKoreaInvestType:
 				raise Exception("[ kr stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
 	def __on_recv_ex_stock_execution(self, data_cnt:int, data:str) -> None:
-    	# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
+		# "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
 		pValue = data.split('^')
 		for data_idx in range(data_cnt):
 			try:
@@ -927,10 +949,10 @@ class ApiKoreaInvestType:
 					)
 					ws_app_info["WS_THREAD"].daemon = True
 					ws_app_info["WS_THREAD"].start()
-     
+	 
 					Util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info["WS_NAME"]} ]")
 					break
-       
+	   
 				except Exception as ex:
 					Util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info["WS_NAME"]} | {ex.__str__()} ]")
    
@@ -1006,7 +1028,7 @@ class ApiKoreaInvestType:
 			file.close()
 
 		except: Util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
-    
+	
 	def __sync_stock_info_table(self) -> None:
 		try:
 			stock_code_list = {
@@ -1035,7 +1057,7 @@ class ApiKoreaInvestType:
 						stock_market = stock_market_code[0]
 						stock_code = stock_market_code[1]
 						rest_api_token_header = rest_api_token["TOKEN_HEADER"]
-      
+	  
 						if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
 							min_micro *= 1
 							stock_info_dict = self.__rest_api_kr_stock_info_dict(rest_api_token_header, stock_code, stock_market)
@@ -1050,18 +1072,18 @@ class ApiKoreaInvestType:
 						diff_micro = (DateTime.now() - start_dt).microseconds
 						if min_micro > diff_micro:
 							time.sleep((min_micro - diff_micro) / 1000000.)
-       
+	   
 					except Exception as e:
 						Util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
 
-      
+	  
 			temp_thread_list = []
 			for idx in range(len(self.__rest_api_token_list)):
 				t_thread = Thread(
 					name= f"KoreaInvest_Update_Stock_Info_{idx}",
-        			target= kernel_func,
+					target= kernel_func,
 					args=(self.__rest_api_token_list[idx], temp_market_code_list[idx])
-           		)
+		   		)
 				t_thread.daemon = True
 				t_thread.start()
 				temp_thread_list.append(t_thread)
@@ -1075,6 +1097,54 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			Util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
 
+	def __sync_ws_data_table(self) -> None:
+		try:
+			if self.__ws_query_type == "KR":
+				select_query = (
+					"SELECT "
+					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+					+ "FROM stock_last_ws_query AS L "
+					+ "JOIN stock_info AS I "
+					+ "ON L.stock_code = I.stock_code "
+					+ "WHERE I.stock_market='KOSPI' "
+	 				+ "OR I.stock_market='KOSDAQ' "
+		 			+ "OR I.stock_market='KONEX'"
+				)
+			elif self.__ws_query_type == "EX":
+				select_query = (
+					"SELECT "
+					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+					+ "FROM stock_last_ws_query AS L "
+					+ "JOIN stock_info AS I "
+					+ "ON L.stock_code = I.stock_code "
+					+ "WHERE I.stock_market='NYSE' "
+	 				+ "OR I.stock_market='NASDAQ' "
+		 			+ "OR I.stock_market='AMEX'"
+				)
+			else:
+				raise
+
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
+			cursor.execute(select_query)
+			sql_query_list = cursor.fetchall()
+   
+			this_year = DateTime.now().year
+   
+			for sql_query in sql_query_list:
+				if sql_query[3] == "H0STCNT0" or sql_query[3] == "HDFSCNT0":
+					self.__create_stock_execution_table(sql_query[1], this_year)
+					self.__create_stock_execution_table(sql_query[1], this_year + 1)
+     
+				elif sql_query[3] == "H0STASP0" or sql_query[3] == "HDFSASP0":
+					self.__create_stock_orderbook_table(sql_query[1], this_year)
+					self.__create_stock_orderbook_table(sql_query[1], this_year + 1)
+	 
+				else:
+					continue
+	  
+		except: raise Exception("Fail to sync websocket data table")
+
 	def __sync_ws_query_list(self) -> None:
 		try:
 			if self.__ws_query_type == "KR":
@@ -1085,8 +1155,8 @@ class ApiKoreaInvestType:
 					+ "JOIN stock_info AS I "
 					+ "ON L.stock_code = I.stock_code "
 					+ "WHERE I.stock_market='KOSPI' "
-     				+ "OR I.stock_market='KOSDAQ' "
-         			+ "OR I.stock_market='KONEX'"
+	 				+ "OR I.stock_market='KOSDAQ' "
+		 			+ "OR I.stock_market='KONEX'"
 				)
 			elif self.__ws_query_type == "EX":
 				select_query = (
@@ -1096,8 +1166,8 @@ class ApiKoreaInvestType:
 					+ "JOIN stock_info AS I "
 					+ "ON L.stock_code = I.stock_code "
 					+ "WHERE I.stock_market='NYSE' "
-     				+ "OR I.stock_market='NASDAQ' "
-         			+ "OR I.stock_market='AMEX'"
+	 				+ "OR I.stock_market='NASDAQ' "
+		 			+ "OR I.stock_market='AMEX'"
 				)
 			else:
 				raise
@@ -1121,7 +1191,7 @@ class ApiKoreaInvestType:
 				app_idx += 1
 				if app_idx >= len(self.__ws_app_info_list):
 					app_idx = 0
-     
+	 
 			for idx in range(len(self.__ws_app_info_list)):
 				self.__ws_app_info_list[idx]["WS_QUERY_LIST"] = temp_list[idx]
 				self.__ws_app_info_list[idx]["WS_APP"].close()
@@ -1140,6 +1210,7 @@ class ApiKoreaInvestType:
 		try:
 			self.__ws_query_type = target_market
 			self.__sync_rest_api_token_list()
+			self.__sync_ws_data_table()
 			self.__sync_ws_query_list()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for korea invest api [ {ex.__str__()} ] ")
@@ -1149,7 +1220,7 @@ class ApiKoreaInvestType:
 			self.__sync_stock_info_table()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")
-       
+	   
 		
 
 

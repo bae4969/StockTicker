@@ -214,8 +214,8 @@ class ApiBithumbType:
   
 	def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
 		database_name = "Z_Coin" + coin_code.replace("/", "_")
-		raw_table_name = database_name + ".Raw" + dt.strftime("%Y%V")
-		candle_table_name = database_name + ".Candle" + dt.strftime("%Y%V")
+		raw_table_name = database_name + ".Raw" + dt.strftime("%Y")
+		candle_table_name = database_name + ".Candle" + dt.strftime("%Y")
 
 		datetime_00_min = dt
 		datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -227,35 +227,6 @@ class ApiBithumbType:
 		ask_amount_str = str(price * ask_volume)
 		bid_amount_str = str(price * bid_volume)
 		
-		self.__sql_query_queue.put(
-			"CREATE DATABASE IF NOT EXISTS " + database_name + " "
-			+ "CHARACTER SET = 'utf8mb4' COLLATE = 'utf8mb4_general_ci'"
-		)
-		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS " + raw_table_name + " ("
-			+ "execution_datetime DATETIME NOT NULL,"
-			+ "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' "
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
-		)
-		self.__sql_query_queue.put(
-			"CREATE TABLE IF NOT EXISTS " + candle_table_name + " ("
-			+ "execution_datetime DATETIME NOT NULL,"
-			+ "execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
-			+ "PRIMARY KEY (execution_datetime) USING BTREE"
-			+ ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
-		)
 		self.__sql_query_queue.put(
 			"INSERT INTO " + raw_table_name + " VALUES ("
 			+ "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
@@ -323,6 +294,57 @@ class ApiBithumbType:
 		self.__sql_common_connection.ping(reconnect=True)
 		cursor = self.__sql_common_connection.cursor()
 		cursor.execute(orderbook_table_query_str)
+
+
+	def __create_coin_execution_table(self, coin_code:str, year:int):
+		database_name = "Z_Coin" + coin_code.replace("/", "_")
+		raw_table_name = f"{database_name}.Raw{year:04d}"
+		candle_table_name = f"{database_name}.Candle{year:04d}"
+     
+		partition_str = f" PARTITION BY RANGE (YEARWEEK(execution_datetime)) ("
+		for i in range(1, 53):
+			partition_str += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
+		partition_str += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+   
+		create_database_query = (
+			f"CREATE DATABASE IF NOT EXISTS {database_name} CHARACTER SET='utf8mb4' COLLATE = 'utf8mb4_general_ci'"
+		)
+		create_ex_raw_table_query = (
+			f"""CREATE TABLE IF NOT EXISTS {raw_table_name} (
+			execution_datetime DATETIME NOT NULL,
+			execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' 
+			) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"""
+		)
+		create_ex_candle_table_query = (
+			f"""CREATE TABLE IF NOT EXISTS {candle_table_name} (
+			execution_datetime DATETIME NOT NULL,
+			execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_close DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_min DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_max DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_non_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+			PRIMARY KEY (execution_datetime) USING BTREE
+			) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"""
+		)
+
+		create_ex_raw_table_query += partition_str
+		create_ex_candle_table_query += partition_str
+
+		self.__sql_query_queue.put(create_database_query)
+		self.__sql_query_queue.put(create_ex_raw_table_query)
+		self.__sql_query_queue.put(create_ex_candle_table_query)
+	
+	def __create_coin_orderbook_table(self, coin_code:str, year:int):
+		# TODO
+		return
 
 
 	##########################################################################
@@ -485,7 +507,31 @@ class ApiBithumbType:
 
 		except Exception as e: 
 			Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
- 
+
+	def __sync_ws_data_table(self) -> None:
+		try:
+			select_query = "SELECT * FROM coin_last_ws_query"
+			self.__sql_common_connection.ping(reconnect=True)
+			cursor = self.__sql_common_connection.cursor()
+			cursor.execute(select_query)
+			sql_query_list = cursor.fetchall()
+   
+			this_year = DateTime.now().year
+
+			for sql_query in sql_query_list:
+				if sql_query[2] == "transaction":
+					self.__create_coin_execution_table(sql_query[1], this_year)
+					self.__create_coin_execution_table(sql_query[1], this_year + 1)
+     
+				elif sql_query[2] == "orderbooksnapshot":
+					self.__create_coin_orderbook_table(sql_query[1], this_year)
+					self.__create_coin_orderbook_table(sql_query[1], this_year + 1)
+     
+				else:
+					continue
+
+		except: raise Exception("Fail to sync websocket data table")
+		
 	def __sync_ws_query_list(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
@@ -493,14 +539,14 @@ class ApiBithumbType:
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
 
-			last_query_list = cursor.fetchall()
+			sql_query_list = cursor.fetchall()
 
 			temp_list = []
-			for info in last_query_list:
+			for sql_query in sql_query_list:
 				temp_list.append({
-					"coin_code" : info[1],
-					"coin_api_type" : info[2],
-					"coin_api_coin_code" : info[3]
+					"coin_code" : sql_query[1],
+					"coin_api_type" : sql_query[2],
+					"coin_api_coin_code" : sql_query[3]
 				})
 	
 			self.__ws_query_list = temp_list
@@ -518,7 +564,8 @@ class ApiBithumbType:
 
 	def SyncDailyInfo(self) -> None:
 		try:
-			self.__ws_query_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
+			self.__ws_query_datetime = DateTime.now().replace(hour=0, minute=0, second=0)
+			self.__sync_ws_data_table()
 			self.__sync_ws_query_list()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")

@@ -1256,7 +1256,6 @@ class ApiKoreaInvestType:
    
 	def SyncWeeklyInfo(self) -> None:
 		try:
-			self.__sync_rest_api_token_list()
 			self.__sync_stock_info_table()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")

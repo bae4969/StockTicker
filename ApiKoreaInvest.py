@@ -34,6 +34,9 @@ class ApiKoreaInvestType:
 	__ws_query_type:str = ""
 	__ws_ex_excution_last_volume:dict = {}
 
+	__MAX_REST_API_COUNT_PER_KEY:int = 20
+	__MAX_WS_QUERY_COUNT_PER_KEY:int = 40
+
 
 	##########################################################################
 
@@ -81,6 +84,7 @@ class ApiKoreaInvestType:
 				+ "stock_name_kr VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
 				+ "stock_market VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+				+ "stock_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_count BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
 				+ "stock_capitalization DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -117,10 +121,14 @@ class ApiKoreaInvestType:
 		except: raise Exception("Fail to create last websocket query table")
 
 	def __create_rest_api_token_list(self) -> None:
-		file = open("./doc/last_token_info.dat", 'r')
-		file_all_string = file.read()
-		file.close()
-		file_data = json.loads(file_all_string)
+		try:
+			file = open("./doc/last_token_info.dat", 'r')
+			file_all_string = file.read()
+			file.close()
+			file_data = json.loads(file_all_string)
+		except:
+			file_data = json.loads("{}")
+			pass
    
 		self.__rest_api_token_list = []
 		for api_key in self.__api_key_list:
@@ -181,7 +189,7 @@ class ApiKoreaInvestType:
 			})
 
 
-	def __get_kospi_stock_list(self) -> list:
+	def __get_kospi_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip", "./temp/kospi_code.zip")
 
@@ -197,8 +205,8 @@ class ApiKoreaInvestType:
 		tmp_fil1 = "./temp/kospi_code_part1.tmp"
 		tmp_fil2 = "./temp/kospi_code_part2.tmp"
 		
-		wf1 = open(tmp_fil1, mode="w")
-		wf2 = open(tmp_fil2, mode="w")
+		wf1 = open(tmp_fil1, mode="w", encoding="cp949")
+		wf2 = open(tmp_fil2, mode="w", encoding="cp949")
 
 		with open("./temp/kospi_code.mst", mode="r", encoding="cp949") as f:
 			for row in f:
@@ -213,23 +221,24 @@ class ApiKoreaInvestType:
 		wf1.close()
 		wf2.close()
 
-		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
-		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',', encoding="cp949")
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns, encoding="cp949")
 		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
 		df["단축코드"] = df["단축코드"].astype('str')
-		
-		files = glob.glob('./temp/*')
-		for f in files:
-			os.remove(f)
 
-		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
-		for i in range(len(ret)):
-			while len(ret[i]) < 6:
-				ret[i] = "0" + ret[i]
+		def format_etn(symbol):
+			if symbol[0].isalpha():
+				return symbol[0] + symbol[1:].zfill(6)
+			else:
+				return symbol.zfill(6) 
 
-		return ret
+		return {
+			"STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
+			"ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
+			"ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+		}
 		
-	def __get_kosdaq_stock_list(self) -> list:
+	def __get_kosdaq_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip", "./temp/kosdaq_code.zip")
 
@@ -245,8 +254,8 @@ class ApiKoreaInvestType:
 		tmp_fil1 = "./temp/kosdaq_code_part1.tmp"
 		tmp_fil2 = "./temp/kosdaq_code_part2.tmp"
 		
-		wf1 = open(tmp_fil1, mode="w")
-		wf2 = open(tmp_fil2, mode="w")
+		wf1 = open(tmp_fil1, mode="w", encoding="cp949")
+		wf2 = open(tmp_fil2, mode="w", encoding="cp949")
 
 		with open("./temp/kosdaq_code.mst", mode="r", encoding="cp949") as f:
 			for row in f:
@@ -261,23 +270,24 @@ class ApiKoreaInvestType:
 		wf1.close()
 		wf2.close()
 
-		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
-		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',', encoding="cp949")
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns, encoding="cp949")
 		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
 		df["단축코드"] = df["단축코드"].astype('str')
-		
-		files = glob.glob('./temp/*')
-		for f in files:
-			os.remove(f)
 
-		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
-		for i in range(len(ret)):
-			while len(ret[i]) < 6:
-				ret[i] = "0" + ret[i]
+		def format_etn(symbol):
+			if symbol[0].isalpha():
+				return symbol[0] + symbol[1:].zfill(6)
+			else:
+				return symbol.zfill(6) 
 
-		return ret
+		return {
+			"STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
+			"ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
+			"ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+		}
 		
-	def __get_konex_stock_list(self) -> list:
+	def __get_konex_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/konex_code.mst.zip", "./temp/konex_code.zip")
 
@@ -293,8 +303,8 @@ class ApiKoreaInvestType:
 		tmp_fil1 = "./temp/konex_code_part1.tmp"
 		tmp_fil2 = "./temp/konex_code_part2.tmp"
 		
-		wf1 = open("./temp/konex_code_part1.tmp", mode="w")
-		wf2 = open("./temp/konex_code_part2.tmp", mode="w")
+		wf1 = open("./temp/konex_code_part1.tmp", mode="w", encoding="cp949")
+		wf2 = open("./temp/konex_code_part2.tmp", mode="w", encoding="cp949")
 
 		with open("./temp/konex_code.mst", mode="r", encoding="cp949") as f:
 			for row in f:
@@ -309,20 +319,25 @@ class ApiKoreaInvestType:
 		wf1.close()
 		wf2.close()
 
-		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',')
-		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns)
+		df1 = pd.read_csv(tmp_fil1, header=None, names=part1_columns, sep=',', encoding="cp949")
+		df2 = pd.read_fwf(tmp_fil2, widths=field_specs, names=part2_columns, encoding="cp949")
 		df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
 		df["단축코드"] = df["단축코드"].astype('str')
 
-		ret = df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].tolist()
-		for i in range(len(ret)):
-			while len(ret[i]) < 6:
-				ret[i] = "0" + ret[i]
+		def format_etn(symbol):
+			if symbol[0].isalpha():
+				return symbol[0] + symbol[1:].zfill(6)
+			else:
+				return symbol.zfill(6) 
 
-		return ret
+		return {
+			"STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
+			"ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
+			"ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+		}
 
 
-	def __get_nyse_stock_list(self) -> list:
+	def __get_nyse_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/nysmst.cod.zip", "./temp/nysmst.cod.zip")
 
@@ -336,13 +351,13 @@ class ApiKoreaInvestType:
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
 		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
-		files = glob.glob('./temp/*')
-		for f in files:
-			os.remove(f)
-
-		return df[df["Security type"] == 2]["Symbol"].tolist()
+		return {
+			"STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
+			"ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
+			"ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+		}
 	
-	def __get_nasdaq_stock_list(self) -> list:
+	def __get_nasdaq_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/nasmst.cod.zip", "./temp/nasmst.cod.zip")
 
@@ -360,9 +375,13 @@ class ApiKoreaInvestType:
 		for f in files:
 			os.remove(f)
 
-		return df[df["Security type"] == 2]["Symbol"].tolist()
+		return {
+			"STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
+			"ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
+			"ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+		}
 	
-	def __get_amex_stock_list(self) -> list:
+	def __get_amex_stock_list(self) -> dict:
 		ssl._create_default_https_context = ssl._create_unverified_context
 		urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/amsmst.cod.zip", "./temp/amsmst.cod.zip")
 
@@ -380,7 +399,11 @@ class ApiKoreaInvestType:
 		for f in files:
 			os.remove(f)
 
-		return df[df["Security type"] == 2]["Symbol"].tolist()
+		return {
+			"STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
+			"ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
+			"ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+		}
 	
 
 	##########################################################################
@@ -416,12 +439,13 @@ class ApiKoreaInvestType:
 	def __update_stock_info_table(self, stock_info_dict:dict) -> None:
 		self.__sql_query_queue.put(
 			f"INSERT INTO {self.__sql_main_db}.stock_info ("
-			+ "stock_code, stock_name_kr, stock_name_en, stock_market, stock_count, stock_price, stock_capitalization"
+			+ "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, stock_count, stock_price, stock_capitalization"
 			+ ") VALUES ("
 			+ f"'{stock_info_dict['stock_code']}',"
 			+ f"'{stock_info_dict['stock_name_kr']}',"
 			+ f"'{stock_info_dict['stock_name_en']}',"
 			+ f"'{stock_info_dict['stock_market']}',"
+			+ f"'{stock_info_dict['stock_type']}',"
 			+ f"'{stock_info_dict['stock_count']}',"
 			+ f"'{stock_info_dict['stock_price']}',"
 			+ f"'{stock_info_dict['stock_cap']}' "
@@ -429,6 +453,7 @@ class ApiKoreaInvestType:
 			+ f"stock_name_kr='{stock_info_dict['stock_name_kr']}',"
 			+ f"stock_name_en='{stock_info_dict['stock_name_en']}',"
 			+ f"stock_market='{stock_info_dict['stock_market']}',"
+			+ f"stock_type='{stock_info_dict['stock_type']}',"
 			+ f"stock_count='{stock_info_dict['stock_count']}',"
 			+ f"stock_price='{stock_info_dict['stock_price']}',"
 			+ f"stock_capitalization='{stock_info_dict['stock_cap']}'"
@@ -566,7 +591,7 @@ class ApiKoreaInvestType:
 	##########################################################################
 		
 
-	def __rest_api_kr_stock_info_dict(self, rest_api_token_header:dict, stock_code:str, stock_market:str) -> dict:
+	def __rest_api_kr_stock_info_dict(self, rest_api_token_header:dict, stock_code:str, stock_type:str, stock_market:str) -> dict:
 		try:
 			api_url = "/uapi/domestic-stock/v1/quotations/search-stock-info"
 			api_header = rest_api_token_header.copy()
@@ -596,6 +621,7 @@ class ApiKoreaInvestType:
 				"stock_name_kr" : rep_stock_info["prdt_abrv_name"].replace("'", " "),
 				"stock_name_en" : rep_stock_info["prdt_eng_abrv_name"].replace("'", " "),
 				"stock_market" : stock_market,
+				"stock_type" : stock_type,
 				"stock_price" : stock_price,
 				"stock_count" : stock_count,
 				"stock_cap" : str(float(stock_count) * float(stock_price)),
@@ -604,7 +630,7 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			raise Exception("[ kr stock info ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
-	def __rest_api_ex_stock_info_dict(self, rest_api_token_header:dict, stock_code:str, stock_market:str) -> dict:
+	def __rest_api_ex_stock_info_dict(self, rest_api_token_header:dict, stock_code:str, stock_type:str, stock_market:str) -> dict:
 		try:
 			api_url = "/uapi/overseas-price/v1/quotations/search-info"
 			api_header = rest_api_token_header.copy()
@@ -679,6 +705,7 @@ class ApiKoreaInvestType:
 				"stock_name_kr" : rep_stock_info1["prdt_name"].replace("'", " "),
 				"stock_name_en" : rep_stock_info1["prdt_eng_name"].replace("'", " "),
 				"stock_market" : stock_market,
+				"stock_type" : stock_type,
 				"stock_price" : stock_price,
 				"stock_count" : stock_count,
 				"stock_cap" : str(float(stock_count) * float(stock_price)),
@@ -1031,6 +1058,13 @@ class ApiKoreaInvestType:
 	
 	def __sync_stock_info_table(self) -> None:
 		try:
+			if not os.path.exists("./temp"):
+				os.makedirs("./temp")
+			else:
+				files = glob.glob('./temp/*')
+				for f in files:
+					os.remove(f)
+
 			stock_code_list = {
 				"KOSPI" : self.__get_kospi_stock_list(),
 				"KOSDAQ" : self.__get_kosdaq_stock_list(),
@@ -1042,29 +1076,31 @@ class ApiKoreaInvestType:
    
 			temp_market_code_list = [[] for _ in range(len(self.__rest_api_token_list))]
 			token_idx = 0
-			for stock_market, stock_codes in stock_code_list.items():
-				for stock_code in stock_codes:
-					temp_market_code_list[token_idx].append([stock_market, stock_code])
-					token_idx += 1
-					if token_idx >= len(self.__rest_api_token_list):
-						token_idx = 0
+			for stock_market, stock_code_infos in stock_code_list.items():
+				for stock_type, stock_code_list in stock_code_infos.items():
+					for stock_code in stock_code_list:
+						temp_market_code_list[token_idx].append([stock_market, stock_type, stock_code])
+						token_idx += 1
+						if token_idx >= len(self.__rest_api_token_list):
+							token_idx = 0
    
 			def kernel_func(rest_api_token:dict, stock_market_code_list:list) -> None:
 				for stock_market_code in stock_market_code_list:
 					try:
-						min_micro = 1000000. / 20
+						min_micro = 1000000. / self.__MAX_REST_API_COUNT_PER_KEY
 						start_dt = DateTime.now()
 						stock_market = stock_market_code[0]
-						stock_code = stock_market_code[1]
+						stock_type = stock_market_code[1]
+						stock_code = stock_market_code[2]
 						rest_api_token_header = rest_api_token["TOKEN_HEADER"]
 	  
 						if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
 							min_micro *= 1
-							stock_info_dict = self.__rest_api_kr_stock_info_dict(rest_api_token_header, stock_code, stock_market)
+							stock_info_dict = self.__rest_api_kr_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
 							self.__update_stock_info_table(stock_info_dict)
 						elif stock_market in ["NASDAQ", "NYSE", "AMEX"]:
 							min_micro *= 2
-							stock_info_dict = self.__rest_api_ex_stock_info_dict(rest_api_token_header, stock_code, stock_market)
+							stock_info_dict = self.__rest_api_ex_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
 							self.__update_stock_info_table(stock_info_dict)
 						else:
 							continue
@@ -1181,12 +1217,15 @@ class ApiKoreaInvestType:
    
 			app_idx = 0
 			for sql_query in sql_query_list:
-				temp_list[app_idx].append({
-					"stock_code" : sql_query[1],
-					"stock_market" : sql_query[2],
-					"stock_api_type" : sql_query[3],
-					"stock_api_stock_code" : sql_query[4]
-				})
+				if temp_list[app_idx].count() > self.__MAX_WS_QUERY_COUNT_PER_KEY:
+					Util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[1]} : {sql_query[3]} )")
+				else:
+					temp_list[app_idx].append({
+						"stock_code" : sql_query[1],
+						"stock_market" : sql_query[2],
+						"stock_api_type" : sql_query[3],
+						"stock_api_stock_code" : sql_query[4]
+					})
 				
 				app_idx += 1
 				if app_idx >= len(self.__ws_app_info_list):
@@ -1217,6 +1256,7 @@ class ApiKoreaInvestType:
    
 	def SyncWeeklyInfo(self) -> None:
 		try:
+			self.__sync_rest_api_token_list()
 			self.__sync_stock_info_table()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")

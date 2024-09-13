@@ -1217,7 +1217,7 @@ class ApiKoreaInvestType:
    
 			app_idx = 0
 			for sql_query in sql_query_list:
-				if temp_list[app_idx].count() > self.__MAX_WS_QUERY_COUNT_PER_KEY:
+				if len(temp_list[app_idx]) > self.__MAX_WS_QUERY_COUNT_PER_KEY:
 					Util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[1]} : {sql_query[3]} )")
 				else:
 					temp_list[app_idx].append({

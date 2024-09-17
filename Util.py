@@ -33,6 +33,7 @@ class MySqlLogger:
 		
 
 	def __func_dequeue_sql_query(self) -> None:
+		last_year = DateTime.min.year
 		while self.__sql_is_stop == False:
 			self.__sql_query_connection.ping(reconnect=True)
 			cursor = self.__sql_query_connection.cursor()
@@ -40,20 +41,31 @@ class MySqlLogger:
 			while self.__sql_query_queue.empty() == False:
 				try:
 					t_log = self.__sql_query_queue.get()
-     
-					table_name = t_log["DATETIME"].strftime("Log%Y%V")
-					create_table_query = f"""
-					CREATE TABLE IF NOT EXISTS {table_name} (
-						log_datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
-						log_name VARCHAR(255),
-						log_type CHAR(1),
-						log_message TEXT,
-						log_function VARCHAR(255),
-						log_file VARCHAR(255),
-						log_line INT
-					) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE;
-					"""
-     
+
+					this_year = t_log["DATETIME"].year
+					table_name = f"Log{this_year:04d}"
+					if last_year != this_year:
+						last_year = this_year
+
+						create_table_query = f"""
+						CREATE TABLE IF NOT EXISTS {table_name} (
+							log_datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+							log_name VARCHAR(255),
+							log_type CHAR(1),
+							log_message TEXT,
+							log_function VARCHAR(255),
+							log_file VARCHAR(255),
+							log_line INT
+						) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE
+						"""
+					
+						create_table_query += f" PARTITION BY RANGE (YEARWEEK(log_datetime)) ("
+						for i in range(1, 53):
+							create_table_query += f"PARTITION p{last_year:04d}{i:02d} VALUES LESS THAN ({last_year:04d}{i+1:02d}),"
+						create_table_query += f"PARTITION p{last_year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+					
+						cursor.execute(create_table_query)
+
 					name = t_log["NAME"].replace("'", '"')
 					type = t_log["TYPE"].replace("'", '"')
 					msg = t_log["MSG"].replace("'", '"')
@@ -66,7 +78,6 @@ class MySqlLogger:
 					VALUES ('{name}', '{type}', '{msg}', '{func}', '{file}', '{line}');
 					"""
      
-					cursor.execute(create_table_query)
 					cursor.execute(insert_query)
      
 					print(f"[{name}] |{type}| {msg} ({func}|{file}:{line})")

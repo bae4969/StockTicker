@@ -94,6 +94,7 @@ class ApiBithumbType:
 				"CREATE TABLE IF NOT EXISTS coin_last_ws_query ("
 				+ "coin_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "coin_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "query_type VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "coin_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "coin_api_coin_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "PRIMARY KEY (coin_query) USING BTREE,"
@@ -508,16 +509,16 @@ class ApiBithumbType:
 		except Exception as e: 
 			Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
 
-	def __sync_ws_data_table(self) -> None:
+	def __sync_ws_query_list(self) -> None:
 		try:
 			select_query = "SELECT * FROM coin_last_ws_query"
 			self.__sql_common_connection.ping(reconnect=True)
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
+
 			sql_query_list = cursor.fetchall()
    
 			this_year = DateTime.now().year
-
 			for sql_query in sql_query_list:
 				if sql_query[2] == "transaction":
 					self.__create_coin_execution_table(sql_query[1], this_year)
@@ -529,17 +530,6 @@ class ApiBithumbType:
      
 				else:
 					continue
-
-		except: raise Exception("Fail to sync websocket data table")
-		
-	def __sync_ws_query_list(self) -> None:
-		try:
-			select_query = "SELECT * FROM coin_last_ws_query"
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(select_query)
-
-			sql_query_list = cursor.fetchall()
 
 			temp_list = []
 			for sql_query in sql_query_list:
@@ -565,7 +555,6 @@ class ApiBithumbType:
 	def SyncDailyInfo(self) -> None:
 		try:
 			self.__ws_query_datetime = DateTime.now().replace(hour=0, minute=0, second=0)
-			self.__sync_ws_data_table()
 			self.__sync_ws_query_list()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")

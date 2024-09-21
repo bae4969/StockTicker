@@ -107,6 +107,7 @@ class ApiKoreaInvestType:
 				"CREATE TABLE IF NOT EXISTS stock_last_ws_query ("
 				+ "stock_query VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_code VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
+				+ "query_type VARCHAR(16) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "stock_api_stock_code VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
 				+ "PRIMARY KEY (stock_query) USING BTREE,"
@@ -1133,54 +1134,6 @@ class ApiKoreaInvestType:
 		except Exception as e:
 			Util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
 
-	def __sync_ws_data_table(self) -> None:
-		try:
-			if self.__ws_query_type == "KR":
-				select_query = (
-					"SELECT "
-					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
-					+ "FROM stock_last_ws_query AS L "
-					+ "JOIN stock_info AS I "
-					+ "ON L.stock_code = I.stock_code "
-					+ "WHERE I.stock_market='KOSPI' "
-	 				+ "OR I.stock_market='KOSDAQ' "
-		 			+ "OR I.stock_market='KONEX'"
-				)
-			elif self.__ws_query_type == "EX":
-				select_query = (
-					"SELECT "
-					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
-					+ "FROM stock_last_ws_query AS L "
-					+ "JOIN stock_info AS I "
-					+ "ON L.stock_code = I.stock_code "
-					+ "WHERE I.stock_market='NYSE' "
-	 				+ "OR I.stock_market='NASDAQ' "
-		 			+ "OR I.stock_market='AMEX'"
-				)
-			else:
-				raise
-
-			self.__sql_common_connection.ping(reconnect=True)
-			cursor = self.__sql_common_connection.cursor()
-			cursor.execute(select_query)
-			sql_query_list = cursor.fetchall()
-   
-			this_year = DateTime.now().year
-   
-			for sql_query in sql_query_list:
-				if sql_query[3] == "H0STCNT0" or sql_query[3] == "HDFSCNT0":
-					self.__create_stock_execution_table(sql_query[1], this_year)
-					self.__create_stock_execution_table(sql_query[1], this_year + 1)
-     
-				elif sql_query[3] == "H0STASP0" or sql_query[3] == "HDFSASP0":
-					self.__create_stock_orderbook_table(sql_query[1], this_year)
-					self.__create_stock_orderbook_table(sql_query[1], this_year + 1)
-	 
-				else:
-					continue
-	  
-		except: raise Exception("Fail to sync websocket data table")
-
 	def __sync_ws_query_list(self) -> None:
 		try:
 			if self.__ws_query_type == "KR":
@@ -1212,9 +1165,21 @@ class ApiKoreaInvestType:
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
 			sql_query_list = cursor.fetchall()
+			
+			this_year = DateTime.now().year
+			for sql_query in sql_query_list:
+				if sql_query[3] == "H0STCNT0" or sql_query[3] == "HDFSCNT0":
+					self.__create_stock_execution_table(sql_query[1], this_year)
+					self.__create_stock_execution_table(sql_query[1], this_year + 1)
+     
+				elif sql_query[3] == "H0STASP0" or sql_query[3] == "HDFSASP0":
+					self.__create_stock_orderbook_table(sql_query[1], this_year)
+					self.__create_stock_orderbook_table(sql_query[1], this_year + 1)
+	 
+				else:
+					continue
    
 			temp_list = [[] for _ in range(len(self.__ws_app_info_list))]
-   
 			app_idx = 0
 			for sql_query in sql_query_list:
 				if len(temp_list[app_idx]) > self.__MAX_WS_QUERY_COUNT_PER_KEY:
@@ -1249,7 +1214,6 @@ class ApiKoreaInvestType:
 		try:
 			self.__ws_query_type = target_market
 			self.__sync_rest_api_token_list()
-			self.__sync_ws_data_table()
 			self.__sync_ws_query_list()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for korea invest api [ {ex.__str__()} ] ")

@@ -511,7 +511,7 @@ class ApiBithumbType:
 
 	def __sync_ws_query_list(self) -> None:
 		try:
-			select_query = "SELECT * FROM coin_last_ws_query"
+			select_query = "SELECT coin_code, coin_api_type, coin_api_coin_code FROM coin_last_ws_query"
 			self.__sql_common_connection.ping(reconnect=True)
 			cursor = self.__sql_common_connection.cursor()
 			cursor.execute(select_query)
@@ -520,13 +520,13 @@ class ApiBithumbType:
    
 			this_year = DateTime.now().year
 			for sql_query in sql_query_list:
-				if sql_query[2] == "transaction":
-					self.__create_coin_execution_table(sql_query[1], this_year)
-					self.__create_coin_execution_table(sql_query[1], this_year + 1)
+				if sql_query[1] == "transaction":
+					self.__create_coin_execution_table(sql_query[0], this_year)
+					self.__create_coin_execution_table(sql_query[0], this_year + 1)
      
-				elif sql_query[2] == "orderbooksnapshot":
-					self.__create_coin_orderbook_table(sql_query[1], this_year)
-					self.__create_coin_orderbook_table(sql_query[1], this_year + 1)
+				elif sql_query[1] == "orderbooksnapshot":
+					self.__create_coin_orderbook_table(sql_query[0], this_year)
+					self.__create_coin_orderbook_table(sql_query[0], this_year + 1)
      
 				else:
 					continue
@@ -534,9 +534,9 @@ class ApiBithumbType:
 			temp_list = []
 			for sql_query in sql_query_list:
 				temp_list.append({
-					"coin_code" : sql_query[1],
-					"coin_api_type" : sql_query[2],
-					"coin_api_coin_code" : sql_query[3]
+					"coin_code" : sql_query[0],
+					"coin_api_type" : sql_query[1],
+					"coin_api_coin_code" : sql_query[2]
 				})
 	
 			self.__ws_query_list = temp_list

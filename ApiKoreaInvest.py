@@ -1139,7 +1139,7 @@ class ApiKoreaInvestType:
 			if self.__ws_query_type == "KR":
 				select_query = (
 					"SELECT "
-					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+					+ "L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
 					+ "FROM stock_last_ws_query AS L "
 					+ "JOIN stock_info AS I "
 					+ "ON L.stock_code = I.stock_code "
@@ -1150,7 +1150,7 @@ class ApiKoreaInvestType:
 			elif self.__ws_query_type == "EX":
 				select_query = (
 					"SELECT "
-					+ "L.stock_query, L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
+					+ "L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
 					+ "FROM stock_last_ws_query AS L "
 					+ "JOIN stock_info AS I "
 					+ "ON L.stock_code = I.stock_code "
@@ -1168,13 +1168,13 @@ class ApiKoreaInvestType:
 			
 			this_year = DateTime.now().year
 			for sql_query in sql_query_list:
-				if sql_query[3] == "H0STCNT0" or sql_query[3] == "HDFSCNT0":
-					self.__create_stock_execution_table(sql_query[1], this_year)
-					self.__create_stock_execution_table(sql_query[1], this_year + 1)
+				if sql_query[2] == "H0STCNT0" or sql_query[2] == "HDFSCNT0":
+					self.__create_stock_execution_table(sql_query[0], this_year)
+					self.__create_stock_execution_table(sql_query[0], this_year + 1)
      
-				elif sql_query[3] == "H0STASP0" or sql_query[3] == "HDFSASP0":
-					self.__create_stock_orderbook_table(sql_query[1], this_year)
-					self.__create_stock_orderbook_table(sql_query[1], this_year + 1)
+				elif sql_query[2] == "H0STASP0" or sql_query[2] == "HDFSASP0":
+					self.__create_stock_orderbook_table(sql_query[0], this_year)
+					self.__create_stock_orderbook_table(sql_query[0], this_year + 1)
 	 
 				else:
 					continue
@@ -1183,13 +1183,13 @@ class ApiKoreaInvestType:
 			app_idx = 0
 			for sql_query in sql_query_list:
 				if len(temp_list[app_idx]) > self.__MAX_WS_QUERY_COUNT_PER_KEY:
-					Util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[1]} : {sql_query[3]} )")
+					Util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[0]} : {sql_query[2]} )")
 				else:
 					temp_list[app_idx].append({
-						"stock_code" : sql_query[1],
-						"stock_market" : sql_query[2],
-						"stock_api_type" : sql_query[3],
-						"stock_api_stock_code" : sql_query[4]
+						"stock_code" : sql_query[0],
+						"stock_market" : sql_query[1],
+						"stock_api_type" : sql_query[2],
+						"stock_api_stock_code" : sql_query[3]
 					})
 				
 				app_idx += 1

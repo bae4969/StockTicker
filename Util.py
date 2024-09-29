@@ -127,18 +127,18 @@ def TryGetDictStr(dict, key, default_str="") -> str:
         return default_str
     
 
-def TryGetDictInt(dict, key, default_str=0) -> int:
+def TryGetDictInt(dict, key, default_value=0) -> int:
     try:
         return int(dict[key])
     except:
-        return default_str
+        return default_value
     
 
-def TryGetDictFloat(dict, key, default_str=0.0) -> float:
+def TryGetDictFloat(dict, key, default_value=0.0) -> float:
     try:
         return float(dict[key])
     except:
-        return default_str
+        return default_value
     
 
 

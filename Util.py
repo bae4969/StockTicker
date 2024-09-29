@@ -118,3 +118,8 @@ def InsertLog(name:str, type:str, msg:str) -> None:
 		line=inspect.stack()[1][2],
 	)
 
+def TryParseFloat(value, default_value=0.0) -> float:
+    try:
+        return float(value)
+    except ValueError:
+        return default_value

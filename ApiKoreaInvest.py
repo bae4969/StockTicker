@@ -613,8 +613,8 @@ class ApiKoreaInvestType:
 				raise Exception("Recv Code")
 
 			rep_stock_info = rep_json["output"]
-			stock_price = float(rep_stock_info["thdt_clpr"])
-			stock_count = float(rep_stock_info["lstg_stqt"])
+			stock_price = Util.TryParseFloat(rep_stock_info["thdt_clpr"])
+			stock_count = Util.TryParseFloat(rep_stock_info["lstg_stqt"])
 
 			return {
 				"is_good_info" : True,
@@ -625,7 +625,7 @@ class ApiKoreaInvestType:
 				"stock_type" : stock_type,
 				"stock_price" : stock_price,
 				"stock_count" : stock_count,
-				"stock_cap" : str(float(stock_count) * float(stock_price)),
+				"stock_cap" : str(stock_count * stock_price),
 			}
    
 		except Exception as e:
@@ -659,7 +659,7 @@ class ApiKoreaInvestType:
 			)
 
 			rep_json = json.loads(response.text)
-			if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code")
+			if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code 1")
 
 			rep_stock_info1 = rep_json["output"]
 
@@ -693,12 +693,12 @@ class ApiKoreaInvestType:
 			)
 
 			rep_json = json.loads(response.text)
-			if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code")
+			if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code 2")
 
 			rep_stock_info2 = rep_json["output"]
 
-			stock_price = float(rep_stock_info2["base"])
-			stock_count = float(rep_stock_info1["lstg_stck_num"])
+			stock_price = Util.TryParseFloat(rep_stock_info2["base"])
+			stock_count = Util.TryParseFloat(rep_stock_info1["lstg_stck_num"])
 
 			return {
 				"is_good_info" : True,
@@ -709,7 +709,7 @@ class ApiKoreaInvestType:
 				"stock_type" : stock_type,
 				"stock_price" : stock_price,
 				"stock_count" : stock_count,
-				"stock_cap" : str(float(stock_count) * float(stock_price)),
+				"stock_cap" : str(stock_count * stock_price),
 			}
 
 		except Exception as e:
@@ -1067,9 +1067,9 @@ class ApiKoreaInvestType:
 					os.remove(f)
 
 			stock_code_list = {
-				# "KOSPI" : self.__get_kospi_stock_list(),
-				# "KOSDAQ" : self.__get_kosdaq_stock_list(),
-				# "KONEX" : self.__get_konex_stock_list(),
+				"KOSPI" : self.__get_kospi_stock_list(),
+				"KOSDAQ" : self.__get_kosdaq_stock_list(),
+				"KONEX" : self.__get_konex_stock_list(),
 				"NASDAQ" : self.__get_nasdaq_stock_list(),
 				"NYSE" : self.__get_nyse_stock_list(),
 				"AMEX" : self.__get_amex_stock_list(),

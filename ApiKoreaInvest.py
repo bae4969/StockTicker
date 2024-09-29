@@ -348,7 +348,7 @@ class ApiKoreaInvestType:
 
 		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
-		df = pd.read_table("./temp/NYSMST.COD",sep='\t',encoding='cp949')
+		df = pd.read_table("./temp/NYSMST.COD",sep='\t',encoding='cp949', na_values=[], keep_default_na=False)
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
 		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
@@ -368,7 +368,7 @@ class ApiKoreaInvestType:
 
 		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
-		df = pd.read_table("./temp/NASMST.COD",sep='\t',encoding='cp949')
+		df = pd.read_table("./temp/NASMST.COD", sep='\t',encoding='cp949', na_values=[], keep_default_na=False)
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
 		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
@@ -392,7 +392,7 @@ class ApiKoreaInvestType:
 
 		# Security type(1:Index,2:Stock,3:ETP(ETF),4:Warrant)
 		# 구분코드(001:ETF,002:ETN,003:ETC,004:Others,005:VIX Underlying ETF,006:VIX Underlying ETN)
-		df = pd.read_table("./temp/AMSMST.COD",sep='\t',encoding='cp949')
+		df = pd.read_table("./temp/AMSMST.COD",sep='\t',encoding='cp949', na_values=['', 'NULL', 'NA'], keep_default_na=False)
 		df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
 		df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
@@ -1067,9 +1067,9 @@ class ApiKoreaInvestType:
 					os.remove(f)
 
 			stock_code_list = {
-				"KOSPI" : self.__get_kospi_stock_list(),
-				"KOSDAQ" : self.__get_kosdaq_stock_list(),
-				"KONEX" : self.__get_konex_stock_list(),
+				# "KOSPI" : self.__get_kospi_stock_list(),
+				# "KOSDAQ" : self.__get_kosdaq_stock_list(),
+				# "KONEX" : self.__get_konex_stock_list(),
 				"NASDAQ" : self.__get_nasdaq_stock_list(),
 				"NYSE" : self.__get_nyse_stock_list(),
 				"AMEX" : self.__get_amex_stock_list(),
@@ -1220,6 +1220,7 @@ class ApiKoreaInvestType:
    
 	def SyncWeeklyInfo(self) -> None:
 		try:
+			self.__sync_rest_api_token_list()
 			self.__sync_stock_info_table()
 		except Exception as ex:
 			Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")

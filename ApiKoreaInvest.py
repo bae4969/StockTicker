@@ -1039,7 +1039,7 @@ class ApiKoreaInvestType:
                     "custtype" : "P"
                 }
     
-            except: raise Exception("Fail to sync rest api token list")
+            except: raise Exception(f"Get New Token | {rest_api_token["API_KEY"]}")
 
         try:
             file_data = {}

@@ -932,11 +932,11 @@ class ApiKoreaInvestType:
                     ws.send(json.dumps(msg))
 
                 except Exception as e:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to process ws send msg [ {ws_app_info["WS_NAME"]} | {e.__str__()} ] ")
+                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to process ws send msg [ {ws_app_info['WS_NAME']} | {e.__str__()} ] ")
 
                 time.sleep(0.5)
 
-            Util.InsertLog("ApiKoreaInvest", "N", f"Opened korea invest websocket [ {ws_app_info["WS_NAME"]} ]")
+            Util.InsertLog("ApiKoreaInvest", "N", f"Opened korea invest websocket [ {ws_app_info['WS_NAME']} ]")
             break
 
     def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
@@ -977,13 +977,13 @@ class ApiKoreaInvestType:
                     ws_app_info["WS_THREAD"].daemon = True
                     ws_app_info["WS_THREAD"].start()
      
-                    Util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info["WS_NAME"]} ]")
+                    Util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info['WS_NAME']} ]")
                     break
        
                 except Exception as ex:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info["WS_NAME"]} | {ex.__str__()} ]")
+                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info['WS_NAME']} | {ex.__str__()} ]")
    
-            Util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_app_info["WS_NAME"]} ]")
+            Util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_app_info['WS_NAME']} ]")
             break
 
 
@@ -1039,7 +1039,7 @@ class ApiKoreaInvestType:
                     "custtype" : "P"
                 }
     
-            except: raise Exception(f"Get New Token | {rest_api_token["API_KEY"]}")
+            except: raise Exception(f"Get New Token | {rest_api_token['API_KEY']}")
 
         try:
             file_data = {}

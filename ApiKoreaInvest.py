@@ -563,7 +563,7 @@ class ApiKoreaInvestType:
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
         create_candle_table_query = (
@@ -581,18 +581,21 @@ class ApiKoreaInvestType:
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
+
+        reorganize_partitions = ""
+        for i in range(1, 53):
+            reorganize_partitions += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
+        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year+1:04d}{1:02d}),"
+        reorganize_partitions += "PARTITION pmax VALUES LESS THAN MAXVALUE"
+
         add_tick_partition_query = (
-            f"""ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO (
-            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
-            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+            f"ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
         add_candle_partition_query = (
-            f"""ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO (
-            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
-            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+            f"ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
 
         self.__enqueue_sql(create_tick_db_query)

@@ -1,3 +1,4 @@
+import config
 import Util
 import requests
 from websocket import WebSocketApp
@@ -45,14 +46,15 @@ class ApiKoreaInvestType:
         self.__sql_main_db = sql_db
         self.__sql_config = {
             'host' : sql_host,
-            'port' : 3306,
+            'port' : config.SQL_PORT,
             'user' : sql_id,
             'password' : sql_pw,
             'db' : sql_db,
-            'charset' : 'utf8',
+            'charset' : config.SQL_CHARSET,
             'autocommit' : True,
         }
         self.__sql_common_connection = pymysql.connect(**self.__sql_config)
+        config.set_session_timeouts(self.__sql_common_connection)
         self.__api_key_list = api_key_list
   
         self.__create_stock_info_table()
@@ -68,8 +70,29 @@ class ApiKoreaInvestType:
             ws_app_info["WS_APP"].close()
         self.__stop_dequeue_sql_query()
 
-    def __enqueue_sql(self, query:str) -> None:
-        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
+    def __enqueue_sql(self, query:str, params=None) -> None:
+        if params is not None:
+            self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, (query, params))
+        else:
+            self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
+
+    def __reconnect(self) -> None:
+        self.__sql_common_connection.ping(reconnect=True)
+        config.set_session_timeouts(self.__sql_common_connection)
+
+    def __execute_sync_query(self, query:str):
+        for attempt in range(1, config.SQL_MAX_RETRY + 1):
+            try:
+                self.__reconnect()
+                cursor = self.__sql_common_connection.cursor()
+                cursor.execute(query)
+                return cursor
+            except Exception as ex:
+                if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
+                    Util.InsertLog("ApiKoreaInvest", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
+                    time.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
+                    continue
+                raise
 
 
     def __create_stock_info_table(self) -> None:
@@ -91,9 +114,7 @@ class ApiKoreaInvestType:
                 + ")COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
             )
 
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(table_query_str)
+            self.__execute_sync_query(table_query_str)
 
         except: raise Exception("Fail to create stock info table")
 
@@ -111,9 +132,7 @@ class ApiKoreaInvestType:
                 + "CONSTRAINT FK_stock_list_last_query_stock_info FOREIGN KEY (stock_code) REFERENCES stock_info (stock_code) ON UPDATE CASCADE ON DELETE CASCADE"
                 + ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
                 )
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(create_table_query)
+            self.__execute_sync_query(create_table_query)
 
         except: raise Exception("Fail to create last websocket query table")
 
@@ -424,7 +443,15 @@ class ApiKoreaInvestType:
 
     async def __async_main(self) -> None:
         self.__sql_query_queue = asyncio.Queue()
-        self.__sql_pool = await aiomysql.create_pool(**self.__sql_config, maxsize=8)
+        retry_count = 0
+        while True:
+            try:
+                self.__sql_pool = await aiomysql.create_pool(**self.__sql_config, maxsize=8)
+                break
+            except Exception as ex:
+                retry_count += 1
+                Util.InsertLog("ApiKoreaInvest", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
+                await asyncio.sleep(2)
         self.__ready_event.set()
         tasks = [asyncio.create_task(self.__async_dequeue()) for _ in range(8)]
         await asyncio.gather(*tasks)
@@ -433,38 +460,56 @@ class ApiKoreaInvestType:
 
     async def __async_dequeue(self) -> None:
         while True:
-            query = await self.__sql_query_queue.get()
-            if query is None:
+            item = await self.__sql_query_queue.get()
+            if item is None:
                 break
-            try:
-                async with self.__sql_pool.acquire() as conn:
-                    async with conn.cursor() as cursor:
-                        await cursor.execute(query)
-            except:
-                pass
+
+            if isinstance(item, tuple):
+                query, params = item
+            else:
+                query, params = item, None
+
+            for attempt in range(1, config.SQL_MAX_RETRY + 1):
+                try:
+                    async with self.__sql_pool.acquire() as conn:
+                        async with conn.cursor() as cursor:
+                            await cursor.execute(query, params)
+                    break
+                except Exception as ex:
+                    if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
+                        Util.InsertLog("ApiKoreaInvest", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
+                        await asyncio.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
+                        continue
+
+                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
+                    break
 
 
     def __update_stock_info_table(self, stock_info_dict:dict) -> None:
         self.__enqueue_sql(
             f"INSERT INTO {self.__sql_main_db}.stock_info ("
-            + "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, stock_count, stock_price, stock_capitalization"
-            + ") VALUES ("
-            + f"'{stock_info_dict['stock_code']}',"
-            + f"'{stock_info_dict['stock_name_kr']}',"
-            + f"'{stock_info_dict['stock_name_en']}',"
-            + f"'{stock_info_dict['stock_market']}',"
-            + f"'{stock_info_dict['stock_type']}',"
-            + f"'{stock_info_dict['stock_count']}',"
-            + f"'{stock_info_dict['stock_price']}',"
-            + f"'{stock_info_dict['stock_cap']}' "
-            + ") ON DUPLICATE KEY UPDATE "
-            + f"stock_name_kr='{stock_info_dict['stock_name_kr']}',"
-            + f"stock_name_en='{stock_info_dict['stock_name_en']}',"
-            + f"stock_market='{stock_info_dict['stock_market']}',"
-            + f"stock_type='{stock_info_dict['stock_type']}',"
-            + f"stock_count='{stock_info_dict['stock_count']}',"
-            + f"stock_price='{stock_info_dict['stock_price']}',"
-            + f"stock_capitalization='{stock_info_dict['stock_cap']}'"
+            "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, stock_count, stock_price, stock_capitalization"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s"
+            ") ON DUPLICATE KEY UPDATE "
+            "stock_name_kr=%s, stock_name_en=%s, stock_market=%s, stock_type=%s, "
+            "stock_count=%s, stock_price=%s, stock_capitalization=%s",
+            (
+                stock_info_dict['stock_code'],
+                stock_info_dict['stock_name_kr'],
+                stock_info_dict['stock_name_en'],
+                stock_info_dict['stock_market'],
+                stock_info_dict['stock_type'],
+                stock_info_dict['stock_count'],
+                stock_info_dict['stock_price'],
+                stock_info_dict['stock_cap'],
+                stock_info_dict['stock_name_kr'],
+                stock_info_dict['stock_name_en'],
+                stock_info_dict['stock_market'],
+                stock_info_dict['stock_type'],
+                stock_info_dict['stock_count'],
+                stock_info_dict['stock_price'],
+                stock_info_dict['stock_cap'],
+            )
         )
 
     def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
@@ -532,7 +577,7 @@ class ApiKoreaInvestType:
             + "execution_datetime DATETIME NOT NULL,"
             + "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
             + "execution_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0'"
-            + ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
+            + ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
         )
         insert_orderbook_table_query_str = (
             "INSERT INTO stock_orderbook_" + table_name + " VALUES ("
@@ -541,10 +586,8 @@ class ApiKoreaInvestType:
             + ")"
         )
 
-        self.__sql_common_connection.ping(reconnect=True)
-        cursor = self.__sql_common_connection.cursor()
-        cursor.execute(create_orderbook_table_query_str)
-        cursor.execute(insert_orderbook_table_query_str)
+        self.__execute_sync_query(create_orderbook_table_query_str)
+        self.__execute_sync_query(insert_orderbook_table_query_str)
 
     
     def __create_stock_execution_table(self, stock_code:str, year:int):
@@ -588,7 +631,7 @@ class ApiKoreaInvestType:
         reorganize_partitions = ""
         for i in range(1, 53):
             reorganize_partitions += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year+1:04d}{1:02d}),"
+        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year:04d}{54:02d}),"
         reorganize_partitions += "PARTITION pmax VALUES LESS THAN MAXVALUE"
 
         add_tick_partition_query = (
@@ -640,8 +683,8 @@ class ApiKoreaInvestType:
             return {
                 "is_good_info" : True,
                 "stock_code" : stock_code,
-                "stock_name_kr" : rep_stock_info["prdt_abrv_name"].replace("'", " "),
-                "stock_name_en" : rep_stock_info["prdt_eng_abrv_name"].replace("'", " "),
+                "stock_name_kr" : rep_stock_info["prdt_abrv_name"],
+                "stock_name_en" : rep_stock_info["prdt_eng_abrv_name"],
                 "stock_market" : stock_market,
                 "stock_type" : stock_type,
                 "stock_price" : stock_price,
@@ -724,8 +767,8 @@ class ApiKoreaInvestType:
             return {
                 "is_good_info" : True,
                 "stock_code" : stock_code,
-                "stock_name_kr" : rep_stock_info1["prdt_name"].replace("'", " "),
-                "stock_name_en" : rep_stock_info1["prdt_eng_name"].replace("'", " "),
+                "stock_name_kr" : rep_stock_info1["prdt_name"],
+                "stock_name_en" : rep_stock_info1["prdt_eng_name"],
                 "stock_market" : stock_market,
                 "stock_type" : stock_type,
                 "stock_price" : stock_price,
@@ -907,13 +950,13 @@ class ApiKoreaInvestType:
                 # H0STASP0 : 국내 주식 호가
                 # HDFSASP0 : 해외 주식 호가
                 if trid0 == "H0STCNT0":
-                    Thread(name="KoreaInvest_KR_Execution", target=self.__on_recv_kr_stock_execution(int(recvstr[2]), recvstr[3])).start()
+                    Thread(name="KoreaInvest_KR_Execution", target=self.__on_recv_kr_stock_execution, args=(int(recvstr[2]), recvstr[3])).start()
                 elif trid0 == "HDFSCNT0":
-                    Thread(name="KoreaInvest_EX_Execution", target=self.__on_recv_ex_stock_execution(int(recvstr[2]), recvstr[3])).start()
+                    Thread(name="KoreaInvest_EX_Execution", target=self.__on_recv_ex_stock_execution, args=(int(recvstr[2]), recvstr[3])).start()
                 elif trid0 == "H0STASP0":
-                    Thread(name="KoreaInvest_KR_Orderbook", target=self.__on_recv_kr_stock_orderbook(recvstr[3])).start()
+                    Thread(name="KoreaInvest_KR_Orderbook", target=self.__on_recv_kr_stock_orderbook, args=(recvstr[3],)).start()
                 elif trid0 == "HDFSASP0":
-                    Thread(name="KoreaInvest_EX_Orderbook", target=self.__on_recv_ex_stock_orderbook(recvstr[3])).start()
+                    Thread(name="KoreaInvest_EX_Orderbook", target=self.__on_recv_ex_stock_orderbook, args=(recvstr[3],)).start()
 
             else:
                 msg_json = json.loads(msg)
@@ -1015,8 +1058,8 @@ class ApiKoreaInvestType:
     def __sync_rest_api_token_list(self) -> None:
         for rest_api_token in self.__rest_api_token_list:
             try:
-                remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).seconds
-                if 43200 < remain_sec and remain_sec < 86220 :
+                remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).total_seconds()
+                if 43200 < remain_sec < 86220:
                     api_url = "/oauth2/revokeP"
                     api_body = {
                         "grant_type" : "client_credentials",
@@ -1182,9 +1225,7 @@ class ApiKoreaInvestType:
             else:
                 raise
 
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(select_query)
+            cursor = self.__execute_sync_query(select_query)
             sql_query_list = cursor.fetchall()
             
             this_year = DateTime.now().year

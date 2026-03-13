@@ -1,3 +1,4 @@
+import config
 import doc.Define as Define
 from datetime import datetime as DateTime
 import inspect
@@ -10,11 +11,11 @@ class MySqlLogger:
     def __init__(self, sql_host:str, sql_id:str, sql_pw:str) -> None:
         self.__sql_config = {
             'host': sql_host,
-            'port': 3306,
+            'port': config.SQL_PORT,
             'user': sql_id,
             'password': sql_pw,
             'db': 'Log',
-            'charset': 'utf8',
+            'charset': config.SQL_CHARSET,
             'autocommit': True,
         }
         self.__ready_event = Event()
@@ -44,51 +45,56 @@ class MySqlLogger:
             t_log = await self.__sql_query_queue.get()
             if t_log is None:
                 break
-            try:
-                async with self.__sql_pool.acquire() as conn:
-                    async with conn.cursor() as cursor:
-                        this_year = t_log["DATETIME"].year
-                        table_name = f"Log{this_year:04d}"
-                        if last_year != this_year:
-                            last_year = this_year
 
-                            create_table_query = f"""
-                            CREATE TABLE IF NOT EXISTS {table_name} (
-                                log_datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
-                                log_name VARCHAR(255),
-                                log_type CHAR(1),
-                                log_message TEXT,
-                                log_function VARCHAR(255),
-                                log_file VARCHAR(255),
-                                log_line INT
-                            ) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE
+            for attempt in range(1, config.SQL_MAX_RETRY + 1):
+                try:
+                    async with self.__sql_pool.acquire() as conn:
+                        async with conn.cursor() as cursor:
+                            this_year = t_log["DATETIME"].year
+                            table_name = f"stock_ticker_log"
+                            if last_year != this_year:
+                                last_year = this_year
+
+                                create_table_query = f"""
+                                CREATE TABLE IF NOT EXISTS {table_name} (
+                                    log_datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                    log_name VARCHAR(255),
+                                    log_type CHAR(1),
+                                    log_message TEXT,
+                                    log_function VARCHAR(255),
+                                    log_file VARCHAR(255),
+                                    log_line INT
+                                ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
+                                """
+
+                                create_table_query += f" PARTITION BY RANGE (YEAR(log_datetime)) ("
+                                create_table_query += f"PARTITION p{last_year:04d} VALUES LESS THAN ({last_year + 1}),"
+                                create_table_query += f"PARTITION pmax VALUES LESS THAN MAXVALUE)"
+
+                                await cursor.execute(create_table_query)
+
+                            name = t_log["NAME"]
+                            type = t_log["TYPE"]
+                            msg = t_log["MSG"]
+                            func = t_log["FUNC"]
+                            file = t_log["FILE"]
+                            line = t_log["LINE"]
+
+                            insert_query = f"""
+                            INSERT INTO {table_name} (log_name, log_type, log_message, log_function, log_file, log_line)
+                            VALUES (%s, %s, %s, %s, %s, %s)
                             """
 
-                            create_table_query += f" PARTITION BY RANGE (YEARWEEK(log_datetime)) ("
-                            for i in range(1, 53):
-                                create_table_query += f"PARTITION p{last_year:04d}{i:02d} VALUES LESS THAN ({last_year:04d}{i+1:02d}),"
-                            create_table_query += f"PARTITION p{last_year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+                            await cursor.execute(insert_query, (name, type, msg, func, file, line))
 
-                            await cursor.execute(create_table_query)
-
-                        name = t_log["NAME"].replace("'", '"')
-                        type = t_log["TYPE"].replace("'", '"')
-                        msg = t_log["MSG"].replace("'", '"')
-                        func = t_log["FUNC"].replace("'", '"')
-                        file = t_log["FILE"].replace("'", '"')
-                        line = t_log["LINE"]
-
-                        insert_query = f"""
-                        INSERT INTO {table_name} (log_name, log_type, log_message, log_function, log_file, log_line)
-                        VALUES ('{name}', '{type}', '{msg}', '{func}', '{file}', '{line}');
-                        """
-
-                        await cursor.execute(insert_query)
-
-                        print(f"[{name}] |{type}| {msg} ({func}|{file}:{line})")
-
-            except Exception as ex:
-                print(ex.__str__())
+                            print(f"[{name}] |{type}| {msg} ({func}|{file}:{line})")
+                    break
+                except Exception as ex:
+                    if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
+                        await asyncio.sleep(min(2 ** attempt, 10))
+                        continue
+                    print(f"Log query failed: {ex.__str__()}")
+                    break
 
     def InsertLog(self, name:str, type:str, msg:str, func:str, file:str, line:int) -> None:
         self.__loop.call_soon_threadsafe(

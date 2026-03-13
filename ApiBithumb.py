@@ -1,3 +1,4 @@
+import config
 import Util
 import requests
 from websocket import WebSocketApp
@@ -33,21 +34,22 @@ class ApiBithumbType:
         self.__sql_main_db = sql_db
         self.__sql_query_config = {
             'host': sql_host,
-            'port': 3306,
+            'port': config.SQL_PORT,
             'user': sql_id,
             'password': sql_pw,
-            'charset': 'utf8',
+            'charset': config.SQL_CHARSET,
             'autocommit': True,
         }
         self.__sql_common_connection = pymysql.connect(
             host = sql_host,
-            port = 3306,
+            port = config.SQL_PORT,
             user = sql_id,
             passwd = sql_pw,
             db = sql_db,
-            charset = 'utf8',
+            charset = config.SQL_CHARSET,
             autocommit=True
         )
+        config.set_session_timeouts(self.__sql_common_connection)
 
         self.__create_coin_info_table()
         self.__create_last_ws_query_table()
@@ -60,8 +62,29 @@ class ApiBithumbType:
         self.__ws_app.close()
         self.__stop_dequeue_sql_query()
 
-    def __enqueue_sql(self, query:str) -> None:
-        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
+    def __enqueue_sql(self, query:str, params=None) -> None:
+        if params is not None:
+            self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, (query, params))
+        else:
+            self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
+
+    def __reconnect(self) -> None:
+        self.__sql_common_connection.ping(reconnect=True)
+        config.set_session_timeouts(self.__sql_common_connection)
+
+    def __execute_sync_query(self, query:str):
+        for attempt in range(1, config.SQL_MAX_RETRY + 1):
+            try:
+                self.__reconnect()
+                cursor = self.__sql_common_connection.cursor()
+                cursor.execute(query)
+                return cursor
+            except Exception as ex:
+                if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
+                    Util.InsertLog("ApiBithumb", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
+                    time.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
+                    continue
+                raise
 
 
     def __create_coin_info_table(self) -> None:
@@ -82,9 +105,7 @@ class ApiBithumbType:
                 + ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
             )
 
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(table_query_str)
+            self.__execute_sync_query(table_query_str)
 
         except: raise Exception("Fail to create coin info table")
 
@@ -103,9 +124,7 @@ class ApiBithumbType:
                 + ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
                 )
             
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(create_table_query)
+            self.__execute_sync_query(create_table_query)
 
         except: raise Exception("Fail to create last websocket query table")
 
@@ -151,7 +170,7 @@ class ApiBithumbType:
         bithumb_rep = requests.get(url = "https://api.bithumb.com/public/ticker/ALL_KRW")
         bithumb_rep_json = json.loads(bithumb_rep.text)
         if bithumb_rep_json["status"] != "0000":
-            raise Exception("UPBIT REQUEST ERROR")
+            raise Exception("BITHUMB REQUEST ERROR")
         data_list = bithumb_rep_json["data"]
 
         coin_price_dict = {}
@@ -186,7 +205,15 @@ class ApiBithumbType:
 
     async def __async_main(self) -> None:
         self.__sql_query_queue = asyncio.Queue()
-        self.__sql_pool = await aiomysql.create_pool(**self.__sql_query_config)
+        retry_count = 0
+        while True:
+            try:
+                self.__sql_pool = await aiomysql.create_pool(**self.__sql_query_config)
+                break
+            except Exception as ex:
+                retry_count += 1
+                Util.InsertLog("ApiBithumb", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
+                await asyncio.sleep(2)
         self.__ready_event.set()
         await self.__async_dequeue()
         self.__sql_pool.close()
@@ -194,32 +221,49 @@ class ApiBithumbType:
 
     async def __async_dequeue(self) -> None:
         while True:
-            query = await self.__sql_query_queue.get()
-            if query is None:
+            item = await self.__sql_query_queue.get()
+            if item is None:
                 break
-            try:
-                async with self.__sql_pool.acquire() as conn:
-                    async with conn.cursor() as cursor:
-                        await cursor.execute(query)
-            except:
-                pass
+
+            if isinstance(item, tuple):
+                query, params = item
+            else:
+                query, params = item, None
+
+            for attempt in range(1, config.SQL_MAX_RETRY + 1):
+                try:
+                    async with self.__sql_pool.acquire() as conn:
+                        async with conn.cursor() as cursor:
+                            await cursor.execute(query, params)
+                    break
+                except Exception as ex:
+                    if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
+                        Util.InsertLog("ApiBithumb", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
+                        await asyncio.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
+                        continue
+
+                    Util.InsertLog("ApiBithumb", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
+                    break
 
 
     def __update_coin_info_table(self, coin_info_dict:dict) -> None:
         self.__enqueue_sql(
             f"INSERT INTO {self.__sql_main_db}.coin_info ("
-            + "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
-            + ") VALUES ("
-            + f"'{coin_info_dict['coin_code']}',"
-            + f"'{coin_info_dict['coin_name_kr']}',"
-            + f"'{coin_info_dict['coin_name_en']}',"
-            + f"'{coin_info_dict['coin_price']}',"
-            + f"'{coin_info_dict['coin_amount']}' "
-            + ") ON DUPLICATE KEY UPDATE "
-            + f"coin_name_kr='{coin_info_dict['coin_name_kr']}',"
-            + f"coin_name_en='{coin_info_dict['coin_name_en']}',"
-            + f"coin_price='{coin_info_dict['coin_price']}',"
-            + f"coin_amount='{coin_info_dict['coin_amount']}'"
+            "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
+            ") VALUES (%s, %s, %s, %s, %s"
+            ") ON DUPLICATE KEY UPDATE "
+            "coin_name_kr=%s, coin_name_en=%s, coin_price=%s, coin_amount=%s",
+            (
+                coin_info_dict['coin_code'],
+                coin_info_dict['coin_name_kr'],
+                coin_info_dict['coin_name_en'],
+                coin_info_dict['coin_price'],
+                coin_info_dict['coin_amount'],
+                coin_info_dict['coin_name_kr'],
+                coin_info_dict['coin_name_en'],
+                coin_info_dict['coin_price'],
+                coin_info_dict['coin_amount'],
+            )
         )
   
     def __update_coin_execution_table(self, coin_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
@@ -286,12 +330,10 @@ class ApiBithumbType:
             + "execution_datetime DATETIME NOT NULL,"
             + "execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
             + "execution_volume BIGINT(20) UNSIGNED NOT NULL DEFAULT '0'"
-            + ") COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"
+            + ") COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"
         )
 
-        self.__sql_common_connection.ping(reconnect=True)
-        cursor = self.__sql_common_connection.cursor()
-        cursor.execute(orderbook_table_query_str)
+        self.__execute_sync_query(orderbook_table_query_str)
 
         table_name = coin_code.replace("/", "_")
         orderbook_table_query_str = (
@@ -301,9 +343,7 @@ class ApiBithumbType:
             + ")"
         )
 
-        self.__sql_common_connection.ping(reconnect=True)
-        cursor = self.__sql_common_connection.cursor()
-        cursor.execute(orderbook_table_query_str)
+        self.__execute_sync_query(orderbook_table_query_str)
 
 
     def __create_coin_execution_table(self, coin_code:str, year:int):
@@ -347,7 +387,7 @@ class ApiBithumbType:
         reorganize_partitions = ""
         for i in range(1, 53):
             reorganize_partitions += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year+1:04d}{1:02d}),"
+        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year:04d}{54:02d}),"
         reorganize_partitions += "PARTITION pmax VALUES LESS THAN MAXVALUE"
 
         add_tick_partition_query = (
@@ -436,9 +476,9 @@ class ApiBithumbType:
 
             elif "type" in msg_json:
                 if msg_json["type"] == "transaction":
-                    Thread(name="Bithumb_Execution", target=self.__on_recv_coin_execution(msg_json)).start()
+                    Thread(name="Bithumb_Execution", target=self.__on_recv_coin_execution, args=(msg_json,)).start()
                 elif msg_json["type"] == "orderbooksnapshot":
-                    Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook(msg_json)).start()
+                    Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook, args=(msg_json,)).start()
 
         except Exception as e:
             Util.InsertLog("ApiBithumb", "E", "Fail to process ws recv msg : " + e.__str__())
@@ -533,10 +573,7 @@ class ApiBithumbType:
     def __sync_ws_query_list(self) -> None:
         try:
             select_query = "SELECT coin_code, coin_api_type, coin_api_coin_code FROM coin_last_ws_query"
-            self.__sql_common_connection.ping(reconnect=True)
-            cursor = self.__sql_common_connection.cursor()
-            cursor.execute(select_query)
-
+            cursor = self.__execute_sync_query(select_query)
             sql_query_list = cursor.fetchall()
    
             this_year = DateTime.now().year

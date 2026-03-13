@@ -3,8 +3,9 @@ import requests
 from websocket import WebSocketApp
 import pymysql
 import json
-import queue
-from threading import Thread
+import asyncio
+import aiomysql
+from threading import Thread, Event
 import time
 from datetime import datetime as DateTime
 
@@ -12,10 +13,6 @@ from datetime import datetime as DateTime
 class ApiBithumbType:
     __sql_main_db:str
     __sql_common_connection:pymysql.Connection = None
-    __sql_query_connection:pymysql.Connection = None
-    __sql_is_stop:bool = False
-    __sql_thread:Thread = None
-    __sql_query_queue:queue.Queue = queue.Queue()
 
     __API_BASE_URL:str = "https://api.bithumb.com/public"
 
@@ -34,6 +31,14 @@ class ApiBithumbType:
 
     def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str):
         self.__sql_main_db = sql_db
+        self.__sql_query_config = {
+            'host': sql_host,
+            'port': 3306,
+            'user': sql_id,
+            'password': sql_pw,
+            'charset': 'utf8',
+            'autocommit': True,
+        }
         self.__sql_common_connection = pymysql.connect(
             host = sql_host,
             port = 3306,
@@ -42,14 +47,6 @@ class ApiBithumbType:
             db = sql_db,
             charset = 'utf8',
             autocommit=True
-        )
-        self.__sql_query_connection = pymysql.connect(
-            host = sql_host,
-            port = 3306,
-            user = sql_id,
-            passwd = sql_pw,
-            charset = 'utf8',
-            autocommit=True,
         )
 
         self.__create_coin_info_table()
@@ -62,6 +59,9 @@ class ApiBithumbType:
         self.__ws_keep_connect = False
         self.__ws_app.close()
         self.__stop_dequeue_sql_query()
+
+    def __enqueue_sql(self, query:str) -> None:
+        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
 
 
     def __create_coin_info_table(self) -> None:
@@ -170,34 +170,43 @@ class ApiBithumbType:
  
 
     def __start_dequeue_sql_query(self) -> None:
-        self.__sql_is_stop = False
-        self.__sql_thread = Thread(name= "Bithumb_Dequeue", target=self.__func_dequeue_sql_query)
-        self.__sql_thread.daemon = True
-        self.__sql_thread.start()
+        self.__ready_event = Event()
+        self.__loop = asyncio.new_event_loop()
+        self.__async_thread = Thread(name="Bithumb_Async", target=self.__run_async_loop, daemon=True)
+        self.__async_thread.start()
+        self.__ready_event.wait()
         
     def __stop_dequeue_sql_query(self) -> None:
-        self.__sql_is_stop = True
-        self.__sql_thread.join()
+        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, None)
+        self.__async_thread.join()
 
-    def __func_dequeue_sql_query(self) -> None:
-        while self.__sql_is_stop == False:
-            self.__sql_query_connection.ping(reconnect=True)
-            cursor = self.__sql_query_connection.cursor()
-            while self.__sql_query_queue.empty() == False:
-                try: cursor.execute(self.__sql_query_queue.get())
-                except: pass
+    def __run_async_loop(self) -> None:
+        asyncio.set_event_loop(self.__loop)
+        self.__loop.run_until_complete(self.__async_main())
 
-            time.sleep(0.2)
-        
-        self.__sql_query_connection.ping(reconnect=True)
-        cursor = self.__sql_query_connection.cursor()
-        while self.__sql_query_queue.empty() == False:
-            try: cursor.execute(self.__sql_query_queue.get())
-            except: pass
+    async def __async_main(self) -> None:
+        self.__sql_query_queue = asyncio.Queue()
+        self.__sql_pool = await aiomysql.create_pool(**self.__sql_query_config)
+        self.__ready_event.set()
+        await self.__async_dequeue()
+        self.__sql_pool.close()
+        await self.__sql_pool.wait_closed()
+
+    async def __async_dequeue(self) -> None:
+        while True:
+            query = await self.__sql_query_queue.get()
+            if query is None:
+                break
+            try:
+                async with self.__sql_pool.acquire() as conn:
+                    async with conn.cursor() as cursor:
+                        await cursor.execute(query)
+            except:
+                pass
 
 
     def __update_coin_info_table(self, coin_info_dict:dict) -> None:
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             f"INSERT INTO {self.__sql_main_db}.coin_info ("
             + "coin_code, coin_name_kr, coin_name_en, coin_price, coin_amount"
             + ") VALUES ("
@@ -228,7 +237,7 @@ class ApiBithumbType:
         ask_amount_str = str(price * ask_volume)
         bid_amount_str = str(price * bid_volume)
         
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             "INSERT INTO " + raw_table_name + " VALUES ("
             + "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
             + "'" + price_str + "',"
@@ -237,7 +246,7 @@ class ApiBithumbType:
             + "'" + bid_volume_str + "' "
             + ")"
         )
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             "INSERT INTO " + candle_table_name + " VALUES ("
             + "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
             + "'" + price_str + "',"
@@ -339,9 +348,9 @@ class ApiBithumbType:
         create_ex_raw_table_query += partition_str
         create_ex_candle_table_query += partition_str
 
-        self.__sql_query_queue.put(create_database_query)
-        self.__sql_query_queue.put(create_ex_raw_table_query)
-        self.__sql_query_queue.put(create_ex_candle_table_query)
+        self.__enqueue_sql(create_database_query)
+        self.__enqueue_sql(create_ex_raw_table_query)
+        self.__enqueue_sql(create_ex_candle_table_query)
     
     def __create_coin_orderbook_table(self, coin_code:str, year:int):
         # TODO

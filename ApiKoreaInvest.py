@@ -3,8 +3,9 @@ import requests
 from websocket import WebSocketApp
 import pymysql
 import json
-import queue
-from threading import Thread
+import asyncio
+import aiomysql
+from threading import Thread, Event
 import os
 import pandas as pd
 import urllib.request
@@ -22,7 +23,6 @@ class ApiKoreaInvestType:
     __sql_common_connection:pymysql.Connection = None
     __sql_is_stop:bool = False
     __sql_query_threads:list = []
-    __sql_query_queue:queue.Queue = queue.Queue()
 
     __API_BASE_URL:str = "https://openapi.koreainvestment.com:9443"
     __api_key_list:list = []	# KEY, SECRET
@@ -47,7 +47,7 @@ class ApiKoreaInvestType:
             'host' : sql_host,
             'port' : 3306,
             'user' : sql_id,
-            'passwd' : sql_pw,
+            'password' : sql_pw,
             'db' : sql_db,
             'charset' : 'utf8',
             'autocommit' : True,
@@ -67,6 +67,9 @@ class ApiKoreaInvestType:
             ws_app_info["WS_KEEP_CONNECT"] = False
             ws_app_info["WS_APP"].close()
         self.__stop_dequeue_sql_query()
+
+    def __enqueue_sql(self, query:str) -> None:
+        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, query)
 
 
     def __create_stock_info_table(self) -> None:
@@ -404,40 +407,45 @@ class ApiKoreaInvestType:
  
 
     def __start_dequeue_sql_query(self) -> None:
-        self.__sql_is_stop = False
-        self.__sql_query_threads = []
-        for th_idx in range(8):
-            t_thread = Thread(name=f"KoreaInvest_Dequeue_{th_idx}",target=self.__func_dequeue_sql_query)
-            t_thread.daemon = True
-            t_thread.start()
-            self.__sql_query_threads.append(t_thread)
+        self.__ready_event = Event()
+        self.__loop = asyncio.new_event_loop()
+        self.__async_thread = Thread(name="KoreaInvest_Async", target=self.__run_async_loop, daemon=True)
+        self.__async_thread.start()
+        self.__ready_event.wait()
         
     def __stop_dequeue_sql_query(self) -> None:
-        self.__sql_is_stop = True
-        for t_thread in self.__sql_query_threads:
-            t_thread.join()
+        for _ in range(8):
+            self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, None)
+        self.__async_thread.join()
 
-    def __func_dequeue_sql_query(self) -> None:
-        sql_common_connection = pymysql.connect(**self.__sql_config)
-        
-        while self.__sql_is_stop == False:
-            sql_common_connection.ping(reconnect=True)
-            cursor = sql_common_connection.cursor()
-            while self.__sql_query_queue.empty() == False:
-                try: cursor.execute(self.__sql_query_queue.get())
-                except: pass
+    def __run_async_loop(self) -> None:
+        asyncio.set_event_loop(self.__loop)
+        self.__loop.run_until_complete(self.__async_main())
 
-            time.sleep(0.2)
-        
-        sql_common_connection.ping(reconnect=True)
-        cursor = sql_common_connection.cursor()
-        while self.__sql_query_queue.empty() == False:
-            try: cursor.execute(self.__sql_query_queue.get())
-            except: pass
+    async def __async_main(self) -> None:
+        self.__sql_query_queue = asyncio.Queue()
+        self.__sql_pool = await aiomysql.create_pool(**self.__sql_config, maxsize=8)
+        self.__ready_event.set()
+        tasks = [asyncio.create_task(self.__async_dequeue()) for _ in range(8)]
+        await asyncio.gather(*tasks)
+        self.__sql_pool.close()
+        await self.__sql_pool.wait_closed()
+
+    async def __async_dequeue(self) -> None:
+        while True:
+            query = await self.__sql_query_queue.get()
+            if query is None:
+                break
+            try:
+                async with self.__sql_pool.acquire() as conn:
+                    async with conn.cursor() as cursor:
+                        await cursor.execute(query)
+            except:
+                pass
 
 
     def __update_stock_info_table(self, stock_info_dict:dict) -> None:
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             f"INSERT INTO {self.__sql_main_db}.stock_info ("
             + "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, stock_count, stock_price, stock_capitalization"
             + ") VALUES ("
@@ -460,9 +468,9 @@ class ApiKoreaInvestType:
         )
 
     def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
-        database_name = "Z_Stock" + stock_code.replace("/", "_")
-        raw_table_name = database_name + ".Raw" + dt.strftime("%Y")
-        candle_table_name = database_name + ".Candle" + dt.strftime("%Y")
+        stock_id = "s" + stock_code.replace("/", "_")
+        raw_table_name = f"tick.{stock_id}"
+        candle_table_name = f"candle.{stock_id}"
 
         datetime_00_min = dt
         datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -474,7 +482,7 @@ class ApiKoreaInvestType:
         ask_amount_str = str(price * ask_volume)
         bid_amount_str = str(price * bid_volume)
  
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             "INSERT INTO " + raw_table_name + " VALUES ("
             + "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
             + "'" + price_str + "',"
@@ -483,7 +491,7 @@ class ApiKoreaInvestType:
             + "'" + bid_volume_str + "' "
             + ")"
         )
-        self.__sql_query_queue.put(
+        self.__enqueue_sql(
             "INSERT INTO " + candle_table_name + " VALUES ("
             + "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
             + "'" + price_str + "',"
@@ -540,26 +548,25 @@ class ApiKoreaInvestType:
 
     
     def __create_stock_execution_table(self, stock_code:str, year:int):
-        database_name = "Z_Stock" + stock_code.replace("/", "_")
-        raw_table_name = f"{database_name}.Raw{year:04d}"
-        candle_table_name = f"{database_name}.Candle{year:04d}"
-     
-        partition_str = f" PARTITION BY RANGE (YEARWEEK(execution_datetime)) ("
-        for i in range(1, 53):
-            partition_str += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        partition_str += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+        stock_id = "s" + stock_code.replace("/", "_")
+        tick_table_name = f"tick.{stock_id}"
+        candle_table_name = f"candle.{stock_id}"
 
-        create_database_query = f"CREATE DATABASE IF NOT EXISTS {database_name} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'" 
-        create_ex_raw_table_query = (
-            f"""CREATE TABLE IF NOT EXISTS {raw_table_name} (
+        create_tick_db_query = "CREATE DATABASE IF NOT EXISTS tick CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+        create_candle_db_query = "CREATE DATABASE IF NOT EXISTS candle CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+
+        create_tick_table_query = (
+            f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
             execution_datetime DATETIME NOT NULL,
             execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' 
-            ) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"""
+            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
+            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
-        create_ex_candle_table_query = (
+        create_candle_table_query = (
             f"""CREATE TABLE IF NOT EXISTS {candle_table_name} (
             execution_datetime DATETIME NOT NULL,
             execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',
@@ -573,15 +580,27 @@ class ApiKoreaInvestType:
             execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
-            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"""
+            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
-  
-        create_ex_raw_table_query += partition_str
-        create_ex_candle_table_query += partition_str
-  
-        self.__sql_query_queue.put(create_database_query)
-        self.__sql_query_queue.put(create_ex_raw_table_query)
-        self.__sql_query_queue.put(create_ex_candle_table_query)
+        add_tick_partition_query = (
+            f"""ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO (
+            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+        )
+        add_candle_partition_query = (
+            f"""ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO (
+            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+        )
+
+        self.__enqueue_sql(create_tick_db_query)
+        self.__enqueue_sql(create_candle_db_query)
+        self.__enqueue_sql(create_tick_table_query)
+        self.__enqueue_sql(create_candle_table_query)
+        self.__enqueue_sql(add_tick_partition_query)
+        self.__enqueue_sql(add_candle_partition_query)
         
     def __create_stock_orderbook_table(self, stock_code:str, year:int):
         # TODO

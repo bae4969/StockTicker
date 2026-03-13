@@ -468,9 +468,9 @@ class ApiKoreaInvestType:
         )
 
     def __update_stock_execution_table(self, stock_code:str, dt:DateTime, price:float, non_volume:float, ask_volume:float, bid_volume:float) -> None:
-        database_name = "Z_Stock" + stock_code.replace("/", "_")
-        raw_table_name = database_name + ".Raw" + dt.strftime("%Y")
-        candle_table_name = database_name + ".Candle" + dt.strftime("%Y")
+        stock_id = "s" + stock_code.replace("/", "_")
+        raw_table_name = f"tick.{stock_id}"
+        candle_table_name = f"candle.{stock_id}"
 
         datetime_00_min = dt
         datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -548,26 +548,25 @@ class ApiKoreaInvestType:
 
     
     def __create_stock_execution_table(self, stock_code:str, year:int):
-        database_name = "Z_Stock" + stock_code.replace("/", "_")
-        raw_table_name = f"{database_name}.Raw{year:04d}"
-        candle_table_name = f"{database_name}.Candle{year:04d}"
-     
-        partition_str = f" PARTITION BY RANGE (YEARWEEK(execution_datetime)) ("
-        for i in range(1, 53):
-            partition_str += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        partition_str += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN MAXVALUE)"
+        stock_id = "s" + stock_code.replace("/", "_")
+        tick_table_name = f"tick.{stock_id}"
+        candle_table_name = f"candle.{stock_id}"
 
-        create_database_query = f"CREATE DATABASE IF NOT EXISTS {database_name} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'" 
-        create_ex_raw_table_query = (
-            f"""CREATE TABLE IF NOT EXISTS {raw_table_name} (
+        create_tick_db_query = "CREATE DATABASE IF NOT EXISTS tick CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+        create_candle_db_query = "CREATE DATABASE IF NOT EXISTS candle CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+
+        create_tick_table_query = (
+            f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
             execution_datetime DATETIME NOT NULL,
             execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0' 
-            ) COLLATE='utf8mb4_general_ci' ENGINE=ARCHIVE"""
+            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
+            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
-        create_ex_candle_table_query = (
+        create_candle_table_query = (
             f"""CREATE TABLE IF NOT EXISTS {candle_table_name} (
             execution_datetime DATETIME NOT NULL,
             execution_open DOUBLE UNSIGNED NOT NULL DEFAULT '0',
@@ -581,15 +580,27 @@ class ApiKoreaInvestType:
             execution_ask_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
-            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB"""
+            ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
-  
-        create_ex_raw_table_query += partition_str
-        create_ex_candle_table_query += partition_str
-  
-        self.__enqueue_sql(create_database_query)
-        self.__enqueue_sql(create_ex_raw_table_query)
-        self.__enqueue_sql(create_ex_candle_table_query)
+        add_tick_partition_query = (
+            f"""ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO (
+            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+        )
+        add_candle_partition_query = (
+            f"""ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO (
+            PARTITION p{year:04d} VALUES LESS THAN ({year + 1}),
+            PARTITION pmax VALUES LESS THAN MAXVALUE)"""
+        )
+
+        self.__enqueue_sql(create_tick_db_query)
+        self.__enqueue_sql(create_candle_db_query)
+        self.__enqueue_sql(create_tick_table_query)
+        self.__enqueue_sql(create_candle_table_query)
+        self.__enqueue_sql(add_tick_partition_query)
+        self.__enqueue_sql(add_candle_partition_query)
         
     def __create_stock_orderbook_table(self, stock_code:str, year:int):
         # TODO

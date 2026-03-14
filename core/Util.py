@@ -1,4 +1,4 @@
-import config
+from core import config
 import doc.Define as Define
 from datetime import datetime as DateTime
 import inspect

@@ -23,11 +23,16 @@ migrate_db.py - Z_Coin_*/Z_Stock_* DB → tick/candle DB 마이그레이션 스�
 
 import argparse
 import os
+import sys
 import pymysql
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import config
+
+# 프로젝트 루트를 sys.path에 추가 (scripts/ 하위에서 실행 시)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from core import config
 import doc.Define as Define
 
 

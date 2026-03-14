@@ -1,5 +1,5 @@
-import config
-import Util
+from core import config
+from core import Util
 import requests
 from websocket import WebSocketApp
 import pymysql

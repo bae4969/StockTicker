@@ -80,12 +80,12 @@ class ApiKoreaInvestType:
         self.__sql_common_connection.ping(reconnect=True)
         config.set_session_timeouts(self.__sql_common_connection)
 
-    def __execute_sync_query(self, query:str):
+    def __execute_sync_query(self, query:str, params=None):
         for attempt in range(1, config.SQL_MAX_RETRY + 1):
             try:
                 self.__reconnect()
                 cursor = self.__sql_common_connection.cursor()
-                cursor.execute(query)
+                cursor.execute(query, params)
                 return cursor
             except Exception as ex:
                 if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
@@ -642,8 +642,29 @@ class ApiKoreaInvestType:
         self.__enqueue_sql(create_candle_db_query)
         self.__enqueue_sql(create_tick_table_query)
         self.__enqueue_sql(create_candle_table_query)
-        self.__enqueue_sql(add_tick_partition_query)
-        self.__enqueue_sql(add_candle_partition_query)
+
+        partition_name = f"p{year:04d}"
+        tick_db, tick_tbl = tick_table_name.split(".")
+        candle_db, candle_tbl = candle_table_name.split(".")
+
+        check_query = (
+            "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.PARTITIONS "
+            "WHERE PARTITION_NAME = %s AND ("
+            "(TABLE_SCHEMA = %s AND TABLE_NAME = %s) OR "
+            "(TABLE_SCHEMA = %s AND TABLE_NAME = %s))"
+        )
+        cursor = self.__execute_sync_query(
+            check_query, (partition_name, tick_db, tick_tbl, candle_db, candle_tbl)
+        )
+        if cursor is None:
+            existing = set()
+        else:
+            existing = {(r[0], r[1]) for r in cursor.fetchall()}
+
+        if (tick_db, tick_tbl) not in existing:
+            self.__enqueue_sql(add_tick_partition_query)
+        if (candle_db, candle_tbl) not in existing:
+            self.__enqueue_sql(add_candle_partition_query)
         
     def __create_stock_orderbook_table(self, stock_code:str, year:int):
         # TODO
@@ -1224,19 +1245,6 @@ class ApiKoreaInvestType:
 
             cursor = self.__execute_sync_query(select_query)
             sql_query_list = cursor.fetchall()
-            
-            this_year = DateTime.now().year
-            for sql_query in sql_query_list:
-                if sql_query[2] == "H0STCNT0" or sql_query[2] == "HDFSCNT0":
-                    self.__create_stock_execution_table(sql_query[0], this_year)
-                    self.__create_stock_execution_table(sql_query[0], this_year + 1)
-     
-                elif sql_query[2] == "H0STASP0" or sql_query[2] == "HDFSASP0":
-                    self.__create_stock_orderbook_table(sql_query[0], this_year)
-                    self.__create_stock_orderbook_table(sql_query[0], this_year + 1)
-     
-                else:
-                    continue
    
             temp_list = [[] for _ in range(len(self.__ws_app_info_list))]
             app_idx = 0
@@ -1268,6 +1276,30 @@ class ApiKoreaInvestType:
     def GetCurrentCollectingType(self) -> str:
         return self.__ws_query_type
 
+
+    def SyncPartitions(self) -> None:
+        try:
+            for select_query in [
+                "SELECT stock_code, stock_api_type FROM stock_last_ws_query AS L "
+                "JOIN stock_info AS I ON L.stock_code = I.stock_code "
+                "WHERE I.stock_market IN ('KOSPI','KOSDAQ','KONEX')",
+                "SELECT stock_code, stock_api_type FROM stock_last_ws_query AS L "
+                "JOIN stock_info AS I ON L.stock_code = I.stock_code "
+                "WHERE I.stock_market IN ('NYSE','NASDAQ','AMEX')",
+            ]:
+                cursor = self.__execute_sync_query(select_query)
+                sql_query_list = cursor.fetchall()
+
+                this_year = DateTime.now().year
+                for sql_query in sql_query_list:
+                    if sql_query[1] in ("H0STCNT0", "HDFSCNT0"):
+                        self.__create_stock_execution_table(sql_query[0], this_year)
+                        self.__create_stock_execution_table(sql_query[0], this_year + 1)
+                    elif sql_query[1] in ("H0STASP0", "HDFSASP0"):
+                        self.__create_stock_orderbook_table(sql_query[0], this_year)
+                        self.__create_stock_orderbook_table(sql_query[0], this_year + 1)
+        except Exception as ex:
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync partitions for korea invest api [ {ex.__str__()} ] ")
 
     def SyncDailyInfo(self, target_market:str) -> None:
         try:

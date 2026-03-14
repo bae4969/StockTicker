@@ -1,21 +1,22 @@
-import config
-import doc.Define as Define
-from datetime import datetime as DateTime
+from core import config
+from datetime import datetime as DateTime, timezone as TimeZone, timedelta as TimeDelta
 import inspect
 import asyncio
 import aiomysql
 from threading import Thread, Event
 
+KST = TimeZone(TimeDelta(hours=9))
+
 
 class MySqlLogger:
-    def __init__(self, sql_host:str, sql_id:str, sql_pw:str) -> None:
+    def __init__(self, sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str) -> None:
         self.__sql_config = {
             'host': sql_host,
-            'port': config.SQL_PORT,
+            'port': sql_port,
             'user': sql_id,
             'password': sql_pw,
-            'db': 'Log',
-            'charset': config.SQL_CHARSET,
+            'db': sql_db,
+            'charset': sql_charset,
             'autocommit': True,
         }
         self.__ready_event = Event()
@@ -81,11 +82,12 @@ class MySqlLogger:
                             line = t_log["LINE"]
 
                             insert_query = f"""
-                            INSERT INTO {table_name} (log_name, log_type, log_message, log_function, log_file, log_line)
-                            VALUES (%s, %s, %s, %s, %s, %s)
+                            INSERT INTO {table_name} (log_datetime, log_name, log_type, log_message, log_function, log_file, log_line)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """
 
-                            await cursor.execute(insert_query, (name, type, msg, func, file, line))
+                            log_dt = t_log["DATETIME"].strftime("%Y-%m-%d %H:%M:%S")
+                            await cursor.execute(insert_query, (log_dt, name, type, msg, func, file, line))
 
                             print(f"[{name}] |{type}| {msg} ({func}|{file}:{line})")
                     break
@@ -100,7 +102,7 @@ class MySqlLogger:
         self.__loop.call_soon_threadsafe(
             self.__sql_query_queue.put_nowait,
             {
-                "DATETIME" : DateTime.now(),
+                "DATETIME" : DateTime.now(tz=KST),
                 "NAME" : name,
                 "TYPE" : type,
                 "MSG" : msg,
@@ -111,11 +113,12 @@ class MySqlLogger:
         )
 
 
-logger_obj:MySqlLogger = MySqlLogger(
-    Define.SQL_HOST,
-    Define.SQL_ID,
-    Define.SQL_PW
-)
+logger_obj:MySqlLogger = None
+
+def Init(sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str) -> None:
+    global logger_obj
+    logger_obj = MySqlLogger(sql_host, sql_port, sql_id, sql_pw, sql_db, sql_charset)
+
 def InsertLog(name:str, type:str, msg:str) -> None:
     filepath = inspect.stack()[1][1]
     filename = filepath[filepath.rfind("/") + 1:]

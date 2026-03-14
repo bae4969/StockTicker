@@ -12,9 +12,8 @@ RUN	apt-get	update	&&	\
 		iproute2	&&	\
 	rm	-rf	/var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN	pip	install	--no-cache-dir -r requirements.txt
-RUN	rm requirements.txt
+COPY docker/requirements.txt /workspace/docker/requirements.txt
+RUN	pip	install	--no-cache-dir -r /workspace/docker/requirements.txt
 
 RUN	groupadd --gid 3000 bae4969
 RUN	useradd --uid 1000 --gid bae4969 --shell /bin/bash --create-home bae4969

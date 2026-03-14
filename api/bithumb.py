@@ -282,37 +282,33 @@ class ApiBithumbType:
         bid_amount_str = str(price * bid_volume)
         
         self.__enqueue_sql(
-            "INSERT INTO " + raw_table_name + " VALUES ("
-            + "'" + datetime_00_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
-            + "'" + price_str + "',"
-            + "'" + non_volume_str + "',"
-            + "'" + ask_volume_str + "',"
-            + "'" + bid_volume_str + "' "
-            + ")"
+            f"INSERT INTO {raw_table_name} "
+            "(execution_datetime, execution_price, execution_non_volume, execution_ask_volume, execution_bid_volume) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (datetime_00_min.strftime("%Y-%m-%d %H:%M:%S"), price_str, non_volume_str, ask_volume_str, bid_volume_str)
         )
         self.__enqueue_sql(
-            "INSERT INTO " + candle_table_name + " VALUES ("
-            + "'" + datetime_10_min.strftime("%Y-%m-%d %H:%M:%S") + "',"
-            + "'" + price_str + "',"
-            + "'" + price_str + "',"
-            + "'" + price_str + "',"
-            + "'" + price_str + "',"
-            + "'" + non_volume_str + "',"
-            + "'" + ask_volume_str + "',"
-            + "'" + bid_volume_str + "',"
-            + "'" + non_amount_str + "',"
-            + "'" + ask_amount_str + "',"
-            + "'" + bid_amount_str + "' "
-            + ") ON DUPLICATE KEY UPDATE "
-            + "execution_close='" + price_str + "',"
-            + "execution_min=LEAST(execution_min,'" + price_str + "'),"
-            + "execution_max=GREATEST(execution_max,'" + price_str + "'),"
-            + "execution_non_volume=execution_non_volume+'" + non_volume_str + "',"
-            + "execution_ask_volume=execution_ask_volume+'" + ask_volume_str + "',"
-            + "execution_bid_volume=execution_bid_volume+'" + bid_volume_str + "',"
-            + "execution_non_amount=execution_non_amount+'" + non_amount_str + "',"
-            + "execution_ask_amount=execution_ask_amount+'" + ask_amount_str + "',"
-            + "execution_bid_amount=execution_bid_amount+'" + bid_amount_str + "'"
+            f"INSERT INTO {candle_table_name} VALUES ("
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
+            ") ON DUPLICATE KEY UPDATE "
+            "execution_close=%s,"
+            "execution_min=LEAST(execution_min,%s),"
+            "execution_max=GREATEST(execution_max,%s),"
+            "execution_non_volume=execution_non_volume+%s,"
+            "execution_ask_volume=execution_ask_volume+%s,"
+            "execution_bid_volume=execution_bid_volume+%s,"
+            "execution_non_amount=execution_non_amount+%s,"
+            "execution_ask_amount=execution_ask_amount+%s,"
+            "execution_bid_amount=execution_bid_amount+%s",
+            (
+                datetime_10_min.strftime("%Y-%m-%d %H:%M:%S"),
+                price_str, price_str, price_str, price_str,
+                non_volume_str, ask_volume_str, bid_volume_str,
+                non_amount_str, ask_amount_str, bid_amount_str,
+                price_str, price_str, price_str,
+                non_volume_str, ask_volume_str, bid_volume_str,
+                non_amount_str, ask_amount_str, bid_amount_str,
+            )
         )
 
     def __update_coin_orderbook_table(self, coin_code:str, dt:DateTime, data) -> None:

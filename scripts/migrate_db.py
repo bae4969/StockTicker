@@ -3,10 +3,10 @@
 migrate_db.py - Z_Coin_*/Z_Stock_* DB → tick/candle DB 마이그레이션 스크립트
 
 기존 구조:
-  Z_Coin{code}.Raw{YYYY}    (ARCHIVE) → tick.c{code}   (InnoDB, YEARWEEK 파티션)
-  Z_Coin{code}.Candle{YYYY} (InnoDB)  → candle.c{code} (InnoDB, YEARWEEK 파티션)
-  Z_Stock{code}.Raw{YYYY}   (ARCHIVE) → tick.s{code}   (InnoDB, YEARWEEK 파티션)
-  Z_Stock{code}.Candle{YYYY}(InnoDB)  → candle.s{code} (InnoDB, YEARWEEK 파티션)
+  Z_Coin{code}.Raw{YYYY}    (ARCHIVE) → tick.c{code}   (InnoDB, YEAR 파티션)
+  Z_Coin{code}.Candle{YYYY} (InnoDB)  → candle.c{code} (InnoDB, YEAR 파티션)
+  Z_Stock{code}.Raw{YYYY}   (ARCHIVE) → tick.s{code}   (InnoDB, YEAR 파티션)
+  Z_Stock{code}.Candle{YYYY}(InnoDB)  → candle.s{code} (InnoDB, YEAR 파티션)
 
 사용법:
     python migrate_db.py                  # 마이그레이션 실행 (기존 DB 유지)
@@ -193,25 +193,23 @@ def extract_code(db_name, prefix):
     return db_name[len(prefix):]
 
 
-def build_yearweek_partition_str(year):
-    """해당 연도의 YEARWEEK 파티션 정의 문자열 생성 (53개)"""
-    parts = ""
-    for i in range(1, 53):
-        parts += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-    parts += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year:04d}{54:02d})"
-    return parts
+def build_year_partition_str(year):
+    """해당 연도의 YEAR 파티션 정의 문자열 생성"""
+    return f"PARTITION p{year:04d} VALUES LESS THAN ({year+1:04d})"
 
 
 def create_tick_table(cursor, table_name, dry_run=False):
     execute(cursor, f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
+            execution_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             execution_datetime DATETIME NOT NULL,
             execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
+            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+            PRIMARY KEY (execution_id, execution_datetime)
         ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-        PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+        PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE
         )
     """, dry_run)
@@ -233,15 +231,15 @@ def create_candle_table(cursor, table_name, dry_run=False):
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
         ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-        PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+        PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE
         )
     """, dry_run)
 
 
 def ensure_year_partitions(cursor, table_name, year, dry_run=False):
-    """해당 연도의 YEARWEEK 파티션이 없으면 REORGANIZE pmax로 53개 추가"""
-    partition_name = f"p{year:04d}01"
+    """해당 연도의 YEAR 파티션이 없으면 REORGANIZE pmax로 추가"""
+    partition_name = f"p{year:04d}"
     if not dry_run:
         schema = table_name.split('.')[0]
         tbl = table_name.split('.')[1].strip('`')
@@ -254,7 +252,7 @@ def ensure_year_partitions(cursor, table_name, year, dry_run=False):
         """)
         partitions = cursor.fetchall()
 
-        # 이미 해당 연도 시작 파티션이 있으면 스킵
+        # 이미 해당 연도 파티션이 있으면 스킵
         if any(p[0] == partition_name for p in partitions):
             return
 
@@ -271,18 +269,18 @@ def ensure_year_partitions(cursor, table_name, year, dry_run=False):
             if max_less_than is None or p_val > max_less_than:
                 max_less_than = p_val
 
-        target_start = int(f"{year:04d}01")
+        target_start = year + 1
         if max_less_than is not None and target_start <= max_less_than:
             print(
-                f"      파티션 추가 생략: {table_name} 은(는) 이미 YEARWEEK < {max_less_than} 범위를 포함"
+                f"      파티션 추가 생략: {table_name} 은(는) 이미 YEAR < {max_less_than} 범위를 포함"
             )
             return
 
-    year_partitions = build_yearweek_partition_str(year)
+    year_partition = build_year_partition_str(year)
     try:
         execute(cursor, f"""
             ALTER TABLE {table_name} REORGANIZE PARTITION pmax INTO (
-                {year_partitions},
+                {year_partition},
                 PARTITION pmax VALUES LESS THAN MAXVALUE
             )
         """, dry_run)

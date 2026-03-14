@@ -28,7 +28,7 @@
 
 - **Threading model**: 각 API 클래스는 WebSocket 수신 스레드 + DB 큐 디큐어 스레드(KI는 8개 병렬)를 운영
 - **DB 쓰기**: `queue.Queue` → 별도 스레드에서 dequeue하여 INSERT 실행 (비동기)
-- **파티셔닝**: `YEARWEEK(execution_datetime)` 기준 주 단위 파티션, 연도 변경 시 동적 생성
+- **파티셔닝**: `YEAR(execution_datetime)` 기준 연 단위 파티션, 연도 변경 시 동적 생성
 - **스케줄링**: 08:00~16:00 한국장("KR"), 그 외 해외장("EX") 자동 전환; 매일 Daily sync, 일요일/월요일 새벽 Weekly sync
 
 ## Code Style

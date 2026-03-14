@@ -9,7 +9,7 @@
 - **주기적 데이터 갱신 (Sync)**:
   - 매일: 일일 시세 및 변동 정보 갱신
   - 매주 일요일/월요일 새벽: 상장 종목 리스트 갱신 등의 대규모 메타 정보 싱크 처리
-- **안정적인 DB 저장**: 별도의 Thread와 Queue를 구조화하여 병목 현상 없이 비동기로 SQL 쿼리를 실행 (Data Dequeue). 연/주 단위로 파티셔닝(Partitioning)된 테이블을 동적으로 생성하여 대용량 데이터를 최적화하여 보관합니다.
+- **안정적인 DB 저장**: 별도의 Thread와 Queue를 구조화하여 병목 현상 없이 비동기로 SQL 쿼리를 실행 (Data Dequeue). 연 단위로 파티셔닝(Partitioning)된 테이블을 동적으로 생성하여 대용량 데이터를 최적화하여 보관합니다.
 - **커스텀 데이터베이스 로거**: 작업 단위별로 로그를 남기며, 이 또한 로그 전용 DB 및 파티셔닝된 테이블에 적재됩니다.
 
 ## 📁 파일 구조
@@ -48,7 +48,7 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
 
 - **Bithumb DB / KoreaInvest DB**:
   - `_StockInfo` / `_CoinInfo`: 종목 및 코인의 기본 정보를 담고 있는 테이블. 주기적으로 갱신됨.
-  - `{Symbol}_Execution{YYYY}`: 특정 종목(Symbol)의 년도별 실제 거래 체결 데이터가 누적되는 테이블 (Week 기준으로 Partitioning 적용).
+  - `{Symbol}_Execution{YYYY}`: 특정 종목(Symbol)의 년도별 실제 거래 체결 데이터가 누적되는 테이블 (Year 기준으로 Partitioning 적용).
   - `{Symbol}_Orderbook{YYYY}`: 호가창 내역.
 - **Log DB**: 
   - `Log{YYYY}`: 발생 시간, 파일명, 함수명, 라인 수까지 모두 포함하여 로깅하는 DB입니다.

@@ -600,13 +600,15 @@ class ApiKoreaInvestType:
 
         create_tick_table_query = (
             f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
+            execution_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             execution_datetime DATETIME NOT NULL,
             execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
+            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+            PRIMARY KEY (execution_id, execution_datetime)
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
         create_candle_table_query = (
@@ -624,15 +626,14 @@ class ApiKoreaInvestType:
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
 
-        reorganize_partitions = ""
-        for i in range(1, 53):
-            reorganize_partitions += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year:04d}{54:02d}),"
-        reorganize_partitions += "PARTITION pmax VALUES LESS THAN MAXVALUE"
+        reorganize_partitions = (
+            f"PARTITION p{year:04d} VALUES LESS THAN ({year+1:04d}),"
+            "PARTITION pmax VALUES LESS THAN MAXVALUE"
+        )
 
         add_tick_partition_query = (
             f"ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"

@@ -34,7 +34,19 @@ class MySqlLogger:
 
     async def __async_main(self) -> None:
         self.__sql_query_queue = asyncio.Queue()
-        self.__sql_pool = await aiomysql.create_pool(**self.__sql_config)
+        for attempt in range(1, config.SQL_MAX_RETRY + 1):
+            try:
+                self.__sql_pool = await aiomysql.create_pool(**self.__sql_config)
+                break
+            except Exception as ex:
+                if attempt < config.SQL_MAX_RETRY:
+                    wait = min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX)
+                    print(f"[MySqlLogger] DB 연결 실패 (시도 {attempt}/{config.SQL_MAX_RETRY}): {ex}, {wait}초 후 재시도")
+                    await asyncio.sleep(wait)
+                else:
+                    print(f"[MySqlLogger] DB 연결 최종 실패: {ex}")
+                    self.__ready_event.set()
+                    return
         self.__ready_event.set()
         await self.__async_dequeue()
         self.__sql_pool.close()

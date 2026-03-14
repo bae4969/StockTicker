@@ -14,23 +14,33 @@
 
 ## 📁 파일 구조
 
-- `LoopTicker.py`
-  - 프로그램의 메인 진입점(Main Entry) 모듈입니다.
-  - 가상화폐(`ApiBithumbType`)와 주식(`ApiKoreaInvestType`) 인스턴스를 생성하고, 무한 루프 상태로 시간에 맞춰 Daily, Weekly 정보 업데이트 스레드를 실행시킵니다.
-  - 한국/해외 주식장 오픈 시간(08:00 ~ 16:00) 여부에 따라 수집 시장("KR" / "EX")을 자동으로 스위칭합니다.
-- `ApiBithumb.py`
-  - 빗썸 거래소용 API 래퍼 클래스입니다.
-  - REST API로 코인 목록을 조회하며, WebSocket으로 가상화폐 체결 정보 및 호가를 실시간으로 수신해 DB(MariaDB의 `Bithumb` DB)에 적재합니다.
-- `ApiKoreaInvest.py`
-  - 한국투자증권 API용 래퍼 클래스입니다. 여러 개의 API KEY를 로드해서 사용합니다.
-  - 국내(KR)와 해외(EX) 증시의 종목 마스터 데이터를 주기적으로 zip 파일 형태로 받아서 파싱하여 업데이트합니다.
-  - 주식 체결과 호가 데이터 역시 WebSocket으로 수신하며 병렬 쿼리 큐에 넣어 저장합니다.
-- `Util.py`
-  - 프로젝트 전반에서 사용하는 유틸리티 함수들을 포함합니다.
-  - `MySqlLogger`: 에러 및 각종 시스템 상태 메세지를 MariaDB의 `Log` 데이터베이스에 비동기로 넣는 로깅 클래스입니다.
-  - 안전한 형변환과 딕셔너리 파싱을 위한 `TryGetDictStr`, `TryParseInt` 등의 함수를 지원합니다.
-- `doc/Define.py`
-  - 프로젝트에서 사용되는 전역 상수, 데이터베이스 연결 정보, API Key List (한국투자증권), 기타 환경 설정값 뷰어입니다.
+```
+/workspace/
+├── main.py                    # 메인 진입점 — 무한 루프 스케줄러
+├── api/                       # API 래퍼 모듈
+│   ├── bithumb.py             #   빗썸 REST/WebSocket (가상화폐)
+│   └── korea_invest.py        #   한국투자증권 REST/WebSocket (국내·해외 주식)
+├── core/                      # 공통 유틸/설정
+│   ├── util.py                #   MySqlLogger, safe-parse 유틸
+│   └── config.py              #   DB 재시도 설정, 타임아웃 상수
+├── scripts/                   # 독립 실행 스크립트
+│   └── migrate_db.py          #   레거시 DB → 신규 스키마 마이그레이션
+├── docker/                    # Docker 빌드 및 환경 설정
+│   ├── Dockerfile             #   컨테이너 이미지 빌드 파일
+│   ├── requirements.txt       #   Python 의존성 목록
+├── doc/                       # 비공개 설정 (.gitignore 대상)
+│   └── settings.py            #   SQL 접속정보, API 키, DB명 상수
+├── temp/                      # 런타임 임시 파일 (.gitignore 대상)
+└── README.md
+```
+
+- **`main.py`**: 가상화폐(`ApiBithumbType`)와 주식(`ApiKoreaInvestType`) 인스턴스를 생성하고, 무한 루프 상태로 시간에 맞춰 Daily, Weekly 정보 업데이트 스레드를 실행. 한국/해외 주식장 오픈 시간(08:00 ~ 16:00) 여부에 따라 수집 시장을 자동 스위칭.
+- **`api/bithumb.py`**: 빗썸 REST API로 코인 목록 조회, WebSocket으로 실시간 체결·호가 수신 → MariaDB 적재.
+- **`api/korea_invest.py`**: 한국투자증권 API로 국내/해외 종목 마스터 데이터 갱신, WebSocket으로 실시간 체결·호가 수신 → 병렬 큐 저장.
+- **`core/util.py`**: `MySqlLogger` (비동기 DB 로거), `TryGetDictStr`, `TryParseInt` 등 안전한 형변환 유틸.
+- **`core/config.py`**: SQL 재시도 설정, 타임아웃 상수.
+- **`scripts/migrate_db.py`**: 레거시 DB → 신규 스키마 마이그레이션 도구.
+- **`doc/settings.py`**: 전역 상수, DB 연결 정보, API Key List.
 
 ## 🗄 데이터베이스 구조
 
@@ -45,12 +55,21 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
 
 ## ⚙️ 실행 및 설정 방법
 
-1. `doc/Define.py` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오.
+1. `doc/settings.py` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오.
 2. MariaDB(MySQL) 서버가 켜져 있어야 하며, Python 환경에서 `pymysql`, `requests`, `websocket-client`, `pandas`, `tabulate` 등의 패키지가 설치되어 있어야 합니다.
     ```bash
     pip install pymysql requests websocket-client pandas tabulate
     ```
 3. 메인 스크립트를 실행합니다.
     ```bash
-    python LoopTicker.py
+    python main.py
+    ```
+4. Docker로 실행하는 경우:
+    ```bash
+    docker build -f docker/Dockerfile .
+    docker run --env-file docker/env.txt stock-ticker
+    ```
+5. DB 마이그레이션이 필요한 경우:
+    ```bash
+    python scripts/migrate_db.py [--dry-run] [--workers N] [--only-coin|--only-stock]
     ```

@@ -1,5 +1,5 @@
 from core import config
-from core import Util
+from core import util
 import requests
 from websocket import WebSocketApp
 import pymysql
@@ -42,15 +42,15 @@ class ApiKoreaInvestType:
     ##########################################################################
 
 
-    def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str, api_key_list:list):
+    def __init__(self, sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str, api_key_list:list):
         self.__sql_main_db = sql_db
         self.__sql_config = {
             'host' : sql_host,
-            'port' : config.SQL_PORT,
+            'port' : sql_port,
             'user' : sql_id,
             'password' : sql_pw,
             'db' : sql_db,
-            'charset' : config.SQL_CHARSET,
+            'charset' : sql_charset,
             'autocommit' : True,
         }
         self.__sql_common_connection = pymysql.connect(**self.__sql_config)
@@ -89,7 +89,7 @@ class ApiKoreaInvestType:
                 return cursor
             except Exception as ex:
                 if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
+                    util.InsertLog("ApiKoreaInvest", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
                     time.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
                     continue
                 raise
@@ -450,7 +450,7 @@ class ApiKoreaInvestType:
                 break
             except Exception as ex:
                 retry_count += 1
-                Util.InsertLog("ApiKoreaInvest", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
+                util.InsertLog("ApiKoreaInvest", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
                 await asyncio.sleep(2)
         self.__ready_event.set()
         tasks = [asyncio.create_task(self.__async_dequeue()) for _ in range(8)]
@@ -477,11 +477,11 @@ class ApiKoreaInvestType:
                     break
                 except Exception as ex:
                     if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
-                        Util.InsertLog("ApiKoreaInvest", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
+                        util.InsertLog("ApiKoreaInvest", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
                         await asyncio.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
                         continue
 
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
+                    util.InsertLog("ApiKoreaInvest", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
                     break
 
 
@@ -677,8 +677,8 @@ class ApiKoreaInvestType:
                 raise Exception("Recv Code")
 
             rep_stock_info = rep_json["output"]
-            stock_price = Util.TryParseFloat(rep_stock_info["thdt_clpr"])
-            stock_count = Util.TryParseFloat(rep_stock_info["lstg_stqt"])
+            stock_price = util.TryParseFloat(rep_stock_info["thdt_clpr"])
+            stock_count = util.TryParseFloat(rep_stock_info["lstg_stqt"])
 
             return {
                 "is_good_info" : True,
@@ -761,8 +761,8 @@ class ApiKoreaInvestType:
 
             rep_stock_info2 = rep_json["output"]
 
-            stock_price = Util.TryParseFloat(rep_stock_info2["base"])
-            stock_count = Util.TryParseFloat(rep_stock_info1["lstg_stck_num"])
+            stock_price = util.TryParseFloat(rep_stock_info2["base"])
+            stock_count = util.TryParseFloat(rep_stock_info1["lstg_stck_num"])
 
             return {
                 "is_good_info" : True,
@@ -968,10 +968,10 @@ class ApiKoreaInvestType:
                     rt_cd = msg_json["body"]["rt_cd"]
 
                     if rt_cd != '0':
-                        Util.InsertLog("ApiKoreaInvest", "E", "Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+                        util.InsertLog("ApiKoreaInvest", "E", "Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
 
         except Exception as e:
-            Util.InsertLog("ApiKoreaInvest", "E", "Fail to process ws recv msg : " + e.__str__())
+            util.InsertLog("ApiKoreaInvest", "E", "Fail to process ws recv msg : " + e.__str__())
     
     def __on_ws_open(self, ws:WebSocketApp) -> None:
         for ws_app_info in self.__ws_app_info_list:
@@ -997,11 +997,11 @@ class ApiKoreaInvestType:
                     ws.send(json.dumps(msg))
 
                 except Exception as e:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to process ws send msg [ {ws_app_info['WS_NAME']} | {e.__str__()} ] ")
+                    util.InsertLog("ApiKoreaInvest", "E", f"Fail to process ws send msg [ {ws_app_info['WS_NAME']} | {e.__str__()} ] ")
 
                 time.sleep(0.5)
 
-            Util.InsertLog("ApiKoreaInvest", "N", f"Opened korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+            util.InsertLog("ApiKoreaInvest", "N", f"Opened korea invest websocket [ {ws_app_info['WS_NAME']} ]")
             break
 
     def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
@@ -1042,13 +1042,13 @@ class ApiKoreaInvestType:
                     ws_app_info["WS_THREAD"].daemon = True
                     ws_app_info["WS_THREAD"].start()
      
-                    Util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+                    util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info['WS_NAME']} ]")
                     break
        
                 except Exception as ex:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info['WS_NAME']} | {ex.__str__()} ]")
+                    util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info['WS_NAME']} | {ex.__str__()} ]")
    
-            Util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+            util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_app_info['WS_NAME']} ]")
             break
 
 
@@ -1119,7 +1119,7 @@ class ApiKoreaInvestType:
             file.write(file_data.__str__().replace("'", "\""))
             file.close()
 
-        except: Util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
+        except: util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
     
     def __sync_stock_info_table(self) -> None:
         try:
@@ -1175,7 +1175,7 @@ class ApiKoreaInvestType:
                             time.sleep((min_micro - diff_micro) / 1000000.)
        
                     except Exception as e:
-                        Util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
+                        util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
 
       
             temp_thread_list = []
@@ -1193,10 +1193,10 @@ class ApiKoreaInvestType:
                 temp_thread.join()
                         
 
-            Util.InsertLog("ApiKoreaInvest", "N", "Success to update stock info")
+            util.InsertLog("ApiKoreaInvest", "N", "Success to update stock info")
 
         except Exception as e:
-            Util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
+            util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
 
     def __sync_ws_query_list(self) -> None:
         try:
@@ -1245,7 +1245,7 @@ class ApiKoreaInvestType:
             app_idx = 0
             for sql_query in sql_query_list:
                 if len(temp_list[app_idx]) > self.__MAX_WS_QUERY_COUNT_PER_KEY:
-                    Util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[0]} : {sql_query[2]} )")
+                    util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[0]} : {sql_query[2]} )")
                 else:
                     temp_list[app_idx].append({
                         "stock_code" : sql_query[0],
@@ -1278,14 +1278,14 @@ class ApiKoreaInvestType:
             self.__sync_rest_api_token_list()
             self.__sync_ws_query_list()
         except Exception as ex:
-            Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for korea invest api [ {ex.__str__()} ] ")
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for korea invest api [ {ex.__str__()} ] ")
    
     def SyncWeeklyInfo(self) -> None:
         try:
             self.__sync_rest_api_token_list()
             self.__sync_stock_info_table()
         except Exception as ex:
-            Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")
        
         
 

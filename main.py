@@ -57,9 +57,11 @@ while True:
             Thread(name="KoreaInvest_Update_Stock_Info", target=ki.SyncWeeklyInfo).start()
 
         if DateTime.now() - bh.GetCurrentCollectingDateTime() > TimeDelta(days=1):
+            bh.SyncPartitions()
             bh.SyncDailyInfo()
 
         if target_market != ki.GetCurrentCollectingType():
+            ki.SyncPartitions()
             ki.SyncDailyInfo(target_market)
    
     except:

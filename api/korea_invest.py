@@ -1075,9 +1075,16 @@ class ApiKoreaInvestType:
 
     def __sync_rest_api_token_list(self) -> None:
         for rest_api_token in self.__rest_api_token_list:
+            remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).total_seconds()
+
+            # 토큰 만료까지 20시간 이상 남아있으면 재활용
+            if remain_sec >= 72000:
+                util.InsertLog("ApiKoreaInvest", "N", f"Token reused ({remain_sec:.0f}s remaining) | {rest_api_token['API_KEY'][:8]}...")
+                continue
+
+            # 유효하지만 곧 만료되는 토큰은 revoke 후 재발급
             try:
-                remain_sec = (rest_api_token["TOKEN_EXPIRED_DATETIME"] - DateTime.now()).total_seconds()
-                if 43200 < remain_sec < 86220:
+                if remain_sec > 0 and rest_api_token["TOKEN_VAL"]:
                     api_url = "/oauth2/revokeP"
                     api_body = {
                         "grant_type" : "client_credentials",
@@ -1097,6 +1104,7 @@ class ApiKoreaInvestType:
     
             except: pass
 
+            # 새 토큰 발급
             try:
                 api_url = "/oauth2/tokenP"
                 api_body = {

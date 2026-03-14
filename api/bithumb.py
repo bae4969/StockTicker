@@ -1,5 +1,5 @@
-import config
-import Util
+from core import config
+from core import util
 import requests
 from websocket import WebSocketApp
 import pymysql
@@ -30,23 +30,23 @@ class ApiBithumbType:
     ##########################################################################
 
 
-    def __init__(self, sql_host:str, sql_id:str, sql_pw:str, sql_db:str):
+    def __init__(self, sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str):
         self.__sql_main_db = sql_db
         self.__sql_query_config = {
             'host': sql_host,
-            'port': config.SQL_PORT,
+            'port': sql_port,
             'user': sql_id,
             'password': sql_pw,
-            'charset': config.SQL_CHARSET,
+            'charset': sql_charset,
             'autocommit': True,
         }
         self.__sql_common_connection = pymysql.connect(
             host = sql_host,
-            port = config.SQL_PORT,
+            port = sql_port,
             user = sql_id,
             passwd = sql_pw,
             db = sql_db,
-            charset = config.SQL_CHARSET,
+            charset = sql_charset,
             autocommit=True
         )
         config.set_session_timeouts(self.__sql_common_connection)
@@ -81,7 +81,7 @@ class ApiBithumbType:
                 return cursor
             except Exception as ex:
                 if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
-                    Util.InsertLog("ApiBithumb", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
+                    util.InsertLog("ApiBithumb", "E", f"Sync query retry #{attempt} [ {ex.args[0]} ]")
                     time.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
                     continue
                 raise
@@ -212,7 +212,7 @@ class ApiBithumbType:
                 break
             except Exception as ex:
                 retry_count += 1
-                Util.InsertLog("ApiBithumb", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
+                util.InsertLog("ApiBithumb", "E", f"Fail to create sql pool, retry #{retry_count} [ {ex.__str__()} ]")
                 await asyncio.sleep(2)
         self.__ready_event.set()
         await self.__async_dequeue()
@@ -238,11 +238,11 @@ class ApiBithumbType:
                     break
                 except Exception as ex:
                     if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
-                        Util.InsertLog("ApiBithumb", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
+                        util.InsertLog("ApiBithumb", "E", f"DB query retry #{attempt} [ {ex.args[0]} ]")
                         await asyncio.sleep(min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX))
                         continue
 
-                    Util.InsertLog("ApiBithumb", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
+                    util.InsertLog("ApiBithumb", "E", f"Fail to execute sql query [ {ex.__str__()} ]")
                     break
 
 
@@ -356,13 +356,15 @@ class ApiBithumbType:
 
         create_tick_table_query = (
             f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
+            execution_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
             execution_datetime DATETIME NOT NULL,
             execution_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0'
+            execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
+            PRIMARY KEY (execution_id, execution_datetime)
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
         create_candle_table_query = (
@@ -380,15 +382,14 @@ class ApiBithumbType:
             execution_bid_amount DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             PRIMARY KEY (execution_datetime) USING BTREE
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-            PARTITION BY RANGE (YEARWEEK(execution_datetime)) (
+            PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""
         )
 
-        reorganize_partitions = ""
-        for i in range(1, 53):
-            reorganize_partitions += f"PARTITION p{year:04d}{i:02d} VALUES LESS THAN ({year:04d}{i+1:02d}),"
-        reorganize_partitions += f"PARTITION p{year:04d}{53:02d} VALUES LESS THAN ({year:04d}{54:02d}),"
-        reorganize_partitions += "PARTITION pmax VALUES LESS THAN MAXVALUE"
+        reorganize_partitions = (
+            f"PARTITION p{year:04d} VALUES LESS THAN ({year+1:04d}),"
+            "PARTITION pmax VALUES LESS THAN MAXVALUE"
+        )
 
         add_tick_partition_query = (
             f"ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
@@ -472,7 +473,7 @@ class ApiBithumbType:
                 if msg_json["status"] != "0000":
                     status = msg_json["status"]
                     msg = msg_json["resmsg"]
-                    Util.InsertLog("ApiBithumb", "E", f"Fail msg : [ {status}:{msg} ]")
+                    util.InsertLog("ApiBithumb", "E", f"Fail msg : [ {status}:{msg} ]")
 
             elif "type" in msg_json:
                 if msg_json["type"] == "transaction":
@@ -481,7 +482,7 @@ class ApiBithumbType:
                     Thread(name="Bithumb_Orderbook", target=self.__on_recv_coin_orderbook, args=(msg_json,)).start()
 
         except Exception as e:
-            Util.InsertLog("ApiBithumb", "E", "Fail to process ws recv msg : " + e.__str__())
+            util.InsertLog("ApiBithumb", "E", "Fail to process ws recv msg : " + e.__str__())
     
     def __on_ws_open(self, ws:WebSocketApp) -> None:
         self.__ws_is_opened = True
@@ -502,11 +503,11 @@ class ApiBithumbType:
                 self.__ws_app.send(json.dumps(msg))
 
             except Exception as e:
-                Util.InsertLog("ApiBithumb", "E", f"Fail to process ws send msg [ Bithumb_WS | {e.__str__()} ]")
+                util.InsertLog("ApiBithumb", "E", f"Fail to process ws send msg [ Bithumb_WS | {e.__str__()} ]")
 
             time.sleep(0.25)
 
-        Util.InsertLog("ApiBithumb", "N", "Opened bithumb websocket [ Bithumb_WS ]")
+        util.InsertLog("ApiBithumb", "N", "Opened bithumb websocket [ Bithumb_WS ]")
 
     def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
         self.__ws_is_opened = False
@@ -529,13 +530,13 @@ class ApiBithumbType:
                 self.__ws_thread.start()
                 self.__ws_keep_connect = True
     
-                Util.InsertLog("ApiBithumb", "N", f"Reconnected bithumb websocket [ Bithumb_WS ]")
+                util.InsertLog("ApiBithumb", "N", f"Reconnected bithumb websocket [ Bithumb_WS ]")
                 break
     
             except Exception as ex:
-                Util.InsertLog("ApiBithumb", "E", f"Fail to reconnect korea bithumb websocket [ Bithumb_WS | {ex.__str__()} ]")
+                util.InsertLog("ApiBithumb", "E", f"Fail to reconnect korea bithumb websocket [ Bithumb_WS | {ex.__str__()} ]")
     
-        Util.InsertLog("ApiBithumb", "N", "Closed bithumb websocket [ Bithumb_WS ]")
+        util.InsertLog("ApiBithumb", "N", "Closed bithumb websocket [ Bithumb_WS ]")
 
 
     ##########################################################################
@@ -565,10 +566,10 @@ class ApiBithumbType:
                 self.__update_coin_info_table(coin_info_dict)
 
                 
-            Util.InsertLog("ApiBithumb", "N", "Success to update coin info")
+            util.InsertLog("ApiBithumb", "N", "Success to update coin info")
 
         except Exception as e: 
-            Util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
+            util.InsertLog("ApiBithumb", "E", "Fail to update coin info : " + e.__str__())
 
     def __sync_ws_query_list(self) -> None:
         try:
@@ -615,13 +616,13 @@ class ApiBithumbType:
             self.__ws_query_datetime = DateTime.now().replace(hour=0, minute=0, second=0)
             self.__sync_ws_query_list()
         except Exception as ex:
-            Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")
    
     def SyncWeeklyInfo(self) -> None:
         try:
             self.__sync_coin_info_table()
         except Exception as ex:
-            Util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for bithumb api [ {ex.__str__()} ] ")
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for bithumb api [ {ex.__str__()} ] ")
 
 
 

@@ -1,7 +1,5 @@
 __pycache__/
-doc/
-test/
-temp/
+config/
 *.dat
 *.out
 *.log

@@ -113,14 +113,14 @@ def convert_table(cursor, schema, table_name, dry_run=False):
         execute(cursor,
             f"ALTER TABLE {full_name} "
             f"ADD COLUMN `execution_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT FIRST, "
-            f"ADD PRIMARY KEY (`execution_id`, `execution_datetime`)",
+            f"ADD PRIMARY KEY (`execution_datetime`, `execution_id`) USING BTREE",
             dry_run)
         print(f"    execution_id 컬럼 추가 완료")
     elif schema == "tick" and dry_run:
         execute(cursor,
             f"ALTER TABLE {full_name} "
             f"ADD COLUMN `execution_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT FIRST, "
-            f"ADD PRIMARY KEY (`execution_id`, `execution_datetime`)",
+            f"ADD PRIMARY KEY (`execution_datetime`, `execution_id`) USING BTREE",
             dry_run)
 
     # 4. YEAR 파티션 재설정

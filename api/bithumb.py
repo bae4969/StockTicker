@@ -358,7 +358,7 @@ class ApiBithumbType:
             execution_non_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_ask_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
             execution_bid_volume DOUBLE UNSIGNED NOT NULL DEFAULT '0',
-            PRIMARY KEY (execution_id, execution_datetime)
+            PRIMARY KEY (execution_datetime, execution_id) USING BTREE
             ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
             PARTITION BY RANGE (YEAR(execution_datetime)) (
             PARTITION pmax VALUES LESS THAN MAXVALUE)"""

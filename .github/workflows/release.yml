@@ -1,0 +1,140 @@
+name: Main Branch CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main # main 브랜치에 코드가 푸시(머지 포함)될 때 실행
+
+concurrency:
+  group: production-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: /mnt/10.project/10.StockTicker
+  DEPLOY_BRANCH: main
+
+jobs:
+  # 0단계: 기본 검증 (CI)
+  quality-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies for CI
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r docker/requirements.txt
+
+      - name: Python syntax check
+        run: |
+          python -m compileall -q main.py api core scripts
+
+      - name: Run tests when tests directory exists
+        run: |
+          if [ -d tests ]; then
+            python -m pip install pytest
+            pytest -q
+          else
+            echo "No tests directory. Skipping tests."
+          fi
+
+  # 1단계: 릴리스 생성 (Release)
+  create-release:
+    needs: quality-check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      VERSION: ${{ steps.get_version.outputs.VERSION }}
+      RELEASE_CREATED: ${{ steps.release_decision.outputs.release_created }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 날짜 + 커밋 해시 기반 버전 생성
+      - name: Extract version
+        id: get_version
+        run: |
+          VERSION="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          TAG="${{ steps.get_version.outputs.VERSION }}"
+          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $TAG already exists. Skip release creation."
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Decide release creation
+        id: release_decision
+        run: |
+          if [ "${{ steps.tag_check.outputs.exists }}" = "true" ]; then
+            echo "release_created=false" >> $GITHUB_OUTPUT
+          else
+            echo "release_created=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 배포용 파일 압축
+      - name: Archive production files
+        if: steps.release_decision.outputs.release_created == 'true'
+        run: |
+          zip -r release-source.zip . -x ".git/*" ".github/*" "__pycache__/*" "*.pyc" ".venv/*" "temp/*"
+
+      - name: Upload release artifact
+        if: steps.release_decision.outputs.release_created == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: release-source.zip
+
+      # GitHub Release 생성
+      - name: Create GitHub Release
+        if: steps.release_decision.outputs.release_created == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          files: release-source.zip
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2단계: 서버 배포 (CD)
+  deploy:
+    needs: create-release
+    if: needs.create-release.outputs.RELEASE_CREATED == 'true'
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Sync source in VM directory
+        run: |
+          set -e
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            echo "Repository not found in $APP_DIR"
+            exit 1
+          fi
+
+          # 배포에서 권한 변경은 하지 않고, 권한 문제 시 명확히 실패 처리
+          if [ ! -r "$APP_DIR/.git/objects" ] || [ ! -w "$APP_DIR/.git/objects" ]; then
+            echo "Permission denied for $APP_DIR/.git/objects"
+            echo "Fix repository ownership/permissions manually on runner host, then retry."
+            exit 1
+          fi
+
+          cd "$APP_DIR"
+          git fetch origin "$DEPLOY_BRANCH"
+          git checkout "$DEPLOY_BRANCH"
+          git reset --hard "origin/$DEPLOY_BRANCH"
+
+      - name: Deployment complete
+        run: echo "Successfully deployed ${{ needs.create-release.outputs.VERSION }} to $APP_DIR"

@@ -1,0 +1,32 @@
+{
+	"SQL_HOST": "db_host",
+	"SQL_PORT": 3306,
+	"SQL_ID": "db_user",
+	"SQL_PW": "db_password",
+	"SQL_CHARSET": "utf8",
+	"SQL_LOG_DB": "db_log",
+	"SQL_BH_DB": "db_bithumb",
+	"SQL_KI_DB": "db_koreainvest",
+
+	// 1개 key당 40개의 티커 등록 가능
+	"KI_API_KEY_LIST": [
+		{
+			"ID": 12345678, // 단순 식별용 계좌 ID (실제 API 키와는 무관)
+			"EXPIRY": "2025-12-31", // 단순 식별용 만료일 (실제 API 키와는 무관)
+			"KEY": "your_korea_invest_api_key",
+			"SECRET": "your_korea_invest_api_secret"
+		},
+		{
+			"ID": 12345678, // 단순 식별용 계좌 ID (실제 API 키와는 무관)
+			"EXPIRY": "2025-12-31", // 단순 식별용 만료일 (실제 API 키와는 무관)
+			"KEY": "your_korea_invest_api_key",
+			"SECRET": "your_korea_invest_api_secret"
+		},
+		{
+			"ID": 12345678, // 단순 식별용 계좌 ID (실제 API 키와는 무관)
+			"EXPIRY": "2025-12-31", // 단순 식별용 만료일 (실제 API 키와는 무관)
+			"KEY": "your_korea_invest_api_key",
+			"SECRET": "your_korea_invest_api_secret"
+		}
+	]
+}

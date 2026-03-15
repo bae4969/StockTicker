@@ -1,4 +1,5 @@
 from core import config
+from core import korea_invest_token_info
 from core import util
 import requests
 from websocket import WebSocketApp
@@ -37,6 +38,7 @@ class ApiKoreaInvestType:
 
     __MAX_REST_API_COUNT_PER_KEY:int = 20
     __MAX_WS_QUERY_COUNT_PER_KEY:int = 40
+    __REST_API_DELAY_MICRO:int = 30000
 
 
     ##########################################################################
@@ -138,10 +140,7 @@ class ApiKoreaInvestType:
 
     def __create_rest_api_token_list(self) -> None:
         try:
-            file = open("./doc/last_token_info.dat", 'r')
-            file_all_string = file.read()
-            file.close()
-            file_data = json.loads(file_all_string)
+            file_data = korea_invest_token_info.load_last_token_info()
         except:
             file_data = json.loads("{}")
             pass
@@ -1141,9 +1140,7 @@ class ApiKoreaInvestType:
                     "TOKEN_EXPIRED_DATETIME" : rest_api_token["TOKEN_EXPIRED_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-            file = open("./doc/last_token_info.dat", 'w')
-            file.write(file_data.__str__().replace("'", "\""))
-            file.close()
+            korea_invest_token_info.save_last_token_info(file_data)
 
         except: util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
     
@@ -1178,7 +1175,7 @@ class ApiKoreaInvestType:
             def kernel_func(rest_api_token:dict, stock_market_code_list:list) -> None:
                 for stock_market_code in stock_market_code_list:
                     try:
-                        min_micro = 1000000. / self.__MAX_REST_API_COUNT_PER_KEY
+                        min_micro = 1000000. / self.__MAX_REST_API_COUNT_PER_KEY + self.__REST_API_DELAY_MICRO
                         start_dt = DateTime.now()
                         stock_market = stock_market_code[0]
                         stock_type = stock_market_code[1]

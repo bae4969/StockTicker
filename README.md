@@ -23,13 +23,13 @@
 ├── core/                      # 공통 유틸/설정
 │   ├── util.py                #   MySqlLogger, safe-parse 유틸
 │   └── config.py              #   DB 재시도 설정, 타임아웃 상수
+│   └── settings.py            #   SQL 접속정보, API 키, DB명 상수
 ├── scripts/                   # 독립 실행 스크립트
 │   └── migrate_db.py          #   레거시 DB → 신규 스키마 마이그레이션
 ├── docker/                    # Docker 빌드 및 환경 설정
 │   ├── Dockerfile             #   컨테이너 이미지 빌드 파일
 │   ├── requirements.txt       #   Python 의존성 목록
-├── doc/                       # 비공개 설정 (.gitignore 대상)
-│   └── settings.py            #   SQL 접속정보, API 키, DB명 상수
+├── config/                       # 비공개 설정 (.gitignore 대상)
 ├── temp/                      # 런타임 임시 파일 (.gitignore 대상)
 └── README.md
 ```
@@ -40,7 +40,7 @@
 - **`core/util.py`**: `MySqlLogger` (비동기 DB 로거), `TryGetDictStr`, `TryParseInt` 등 안전한 형변환 유틸.
 - **`core/config.py`**: SQL 재시도 설정, 타임아웃 상수.
 - **`scripts/migrate_db.py`**: 레거시 DB → 신규 스키마 마이그레이션 도구.
-- **`doc/settings.py`**: 전역 상수, DB 연결 정보, API Key List.
+- **`core/settings.py`**: 전역 상수, DB 연결 정보, API Key List.
 
 ## 🗄 데이터베이스 구조
 
@@ -55,10 +55,10 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
 
 ## ⚙️ 실행 및 설정 방법
 
-1. `doc/settings.py` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오.
-2. MariaDB(MySQL) 서버가 켜져 있어야 하며, Python 환경에서 `pymysql`, `requests`, `websocket-client`, `pandas`, `tabulate` 등의 패키지가 설치되어 있어야 합니다.
+1. `config/settings.json` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오.
+2. MariaDB(MySQL) 서버가 켜져 있어야 하며, Python 패키지를 설치해야 합니다.
     ```bash
-    pip install pymysql requests websocket-client pandas tabulate
+    pip install -r docker/requirements.txt
     ```
 3. 메인 스크립트를 실행합니다.
     ```bash
@@ -73,3 +73,21 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
     ```bash
     python scripts/migrate_db.py [--dry-run] [--workers N] [--only-coin|--only-stock]
     ```
+
+6. tick PK 순서를 `(execution_datetime, execution_id)`로 보정하려면:
+    ```bash
+    python scripts/alter_tick_pk_order.py [--dry-run] [--table cBTC]
+    ```
+
+7. YEARWEEK 파티션을 YEAR 파티션으로 재구성하려면:
+    ```bash
+    python scripts/repartition_yearweek_to_year.py [--dry-run] [--only-tick|--only-candle]
+    ```
+
+## 🧭 개발 규칙 요약
+
+- 런타임 수집 모듈(`api/*`, `main.py`)에서는 콘솔 `print` 대신 `util.InsertLog("모듈명", "E"/"N"/"W", "메시지")`를 사용합니다.
+- 운영/마이그레이션 스크립트(`scripts/*`)는 콘솔 `print` 사용이 허용됩니다.
+- SQL 값 바인딩은 반드시 `cursor.execute(query, params)` 형태를 사용합니다.
+- DB 재시도는 `config.is_retryable_error(ex)` 기준(2003, 2006, 2013, 1213, 1205)과 지수 백오프(최대 30초, 최대 5회)를 따릅니다.
+- `main.py`의 메인 루프는 `except: pass` 구조이므로, 신규 코드 추가 시 실패 원인을 `util.InsertLog`로 남겨야 합니다.

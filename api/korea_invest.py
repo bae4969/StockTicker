@@ -138,10 +138,8 @@ class ApiKoreaInvestType:
 
     def __create_rest_api_token_list(self) -> None:
         try:
-            file = open("./doc/last_token_info.dat", 'r')
-            file_all_string = file.read()
-            file.close()
-            file_data = json.loads(file_all_string)
+            with open("./config/last_token_info.json", "r", encoding="utf-8") as file:
+                file_data = json.load(file)
         except:
             file_data = json.loads("{}")
             pass
@@ -1141,9 +1139,8 @@ class ApiKoreaInvestType:
                     "TOKEN_EXPIRED_DATETIME" : rest_api_token["TOKEN_EXPIRED_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
                 }
 
-            file = open("./doc/last_token_info.dat", 'w')
-            file.write(file_data.__str__().replace("'", "\""))
-            file.close()
+            with open("./config/last_token_info.json", "w", encoding="utf-8") as file:
+                json.dump(file_data, file, ensure_ascii=False, indent=2)
 
         except: util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
     

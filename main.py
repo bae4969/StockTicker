@@ -1,10 +1,9 @@
-import doc.settings as Settings
+import core.settings as Settings
 from core import util
 from api.korea_invest import ApiKoreaInvestType as API_KI
 from api.bithumb import ApiBithumbType as API_BH
 import time
 from threading import Thread
-import tabulate
 from datetime import datetime as DateTime
 from datetime import timedelta as TimeDelta
 

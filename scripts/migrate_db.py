@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import config
-import doc.settings as Settings
+import core.settings as Settings
 
 
 def reconnect_and_get_cursor(conn):

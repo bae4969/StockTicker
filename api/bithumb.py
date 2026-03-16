@@ -394,10 +394,10 @@ class ApiBithumbType:
             f"ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
 
-        self.__enqueue_sql(create_tick_db_query)
-        self.__enqueue_sql(create_candle_db_query)
-        self.__enqueue_sql(create_tick_table_query)
-        self.__enqueue_sql(create_candle_table_query)
+        self.__execute_sync_query(create_tick_db_query)
+        self.__execute_sync_query(create_candle_db_query)
+        self.__execute_sync_query(create_tick_table_query)
+        self.__execute_sync_query(create_candle_table_query)
 
         partition_name = f"p{year:04d}"
         tick_db, tick_tbl = tick_table_name.split(".")
@@ -418,9 +418,9 @@ class ApiBithumbType:
             existing = {(r[0], r[1]) for r in cursor.fetchall()}
 
         if (tick_db, tick_tbl) not in existing:
-            self.__enqueue_sql(add_tick_partition_query)
+            self.__execute_sync_query(add_tick_partition_query)
         if (candle_db, candle_tbl) not in existing:
-            self.__enqueue_sql(add_candle_partition_query)
+            self.__execute_sync_query(add_candle_partition_query)
     
     def __create_coin_orderbook_table(self, coin_code:str, year:int):
         # TODO

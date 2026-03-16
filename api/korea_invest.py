@@ -637,10 +637,10 @@ class ApiKoreaInvestType:
             f"ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
 
-        self.__enqueue_sql(create_tick_db_query)
-        self.__enqueue_sql(create_candle_db_query)
-        self.__enqueue_sql(create_tick_table_query)
-        self.__enqueue_sql(create_candle_table_query)
+        self.__execute_sync_query(create_tick_db_query)
+        self.__execute_sync_query(create_candle_db_query)
+        self.__execute_sync_query(create_tick_table_query)
+        self.__execute_sync_query(create_candle_table_query)
 
         partition_name = f"p{year:04d}"
         tick_db, tick_tbl = tick_table_name.split(".")
@@ -661,9 +661,9 @@ class ApiKoreaInvestType:
             existing = {(r[0], r[1]) for r in cursor.fetchall()}
 
         if (tick_db, tick_tbl) not in existing:
-            self.__enqueue_sql(add_tick_partition_query)
+            self.__execute_sync_query(add_tick_partition_query)
         if (candle_db, candle_tbl) not in existing:
-            self.__enqueue_sql(add_candle_partition_query)
+            self.__execute_sync_query(add_candle_partition_query)
         
     def __create_stock_orderbook_table(self, stock_code:str, year:int):
         # TODO
@@ -1285,10 +1285,10 @@ class ApiKoreaInvestType:
     def SyncPartitions(self) -> None:
         try:
             for select_query in [
-                "SELECT stock_code, stock_api_type FROM stock_last_ws_query AS L "
+                "SELECT L.stock_code, L.stock_api_type FROM stock_last_ws_query AS L "
                 "JOIN stock_info AS I ON L.stock_code = I.stock_code "
                 "WHERE I.stock_market IN ('KOSPI','KOSDAQ','KONEX')",
-                "SELECT stock_code, stock_api_type FROM stock_last_ws_query AS L "
+                "SELECT L.stock_code, L.stock_api_type FROM stock_last_ws_query AS L "
                 "JOIN stock_info AS I ON L.stock_code = I.stock_code "
                 "WHERE I.stock_market IN ('NYSE','NASDAQ','AMEX')",
             ]:

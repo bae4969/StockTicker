@@ -648,7 +648,7 @@ class ApiBithumbType:
         try:
             self.__sync_coin_info_table()
         except Exception as ex:
-            util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for bithumb api [ {ex.__str__()} ] ")
+            util.InsertLog("ApiBithumb", "E", f"Fail to sync weekly info for bithumb api [ {ex.__str__()} ] ")
 
 
 

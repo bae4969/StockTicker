@@ -34,11 +34,11 @@ ki = API_KI(
     Settings.KI_API_KEY_LIST,
 )
 
-next_update_info_datetime = DateTime.now().replace(hour=4, minute=0, second=0)
-if next_update_info_datetime.weekday() < 6:
-    next_update_info_datetime += TimeDelta(days= 6 - next_update_info_datetime.weekday())
-else:
-    next_update_info_datetime += TimeDelta(days= 7)
+next_update_info_datetime = DateTime.now().replace(hour=4, minute=30, second=0, microsecond=0)
+days_until_sunday = (6 - next_update_info_datetime.weekday()) % 7
+next_update_info_datetime += TimeDelta(days=days_until_sunday)
+if next_update_info_datetime <= DateTime.now():
+    next_update_info_datetime += TimeDelta(days=7)
 
 while True:
     time.sleep(2)
@@ -63,8 +63,8 @@ while True:
             ki.SyncPartitions()
             ki.SyncDailyInfo(target_market)
    
-    except:
-        pass
+    except Exception as ex:
+        util.InsertLog("Main", "E", f"Main loop error [ {ex.__str__()} ]")
 
 bh.StopCollecting()
 ki.StopCollecting()

@@ -34,7 +34,7 @@ ki = API_KI(
     Settings.KI_API_KEY_LIST,
 )
 
-next_update_info_datetime = DateTime.now().replace(hour=4, minute=30, second=0, microsecond=0)
+next_update_info_datetime = DateTime.now().replace(hour=8, minute=0, second=0, microsecond=0)
 days_until_sunday = (6 - next_update_info_datetime.weekday()) % 7
 next_update_info_datetime += TimeDelta(days=days_until_sunday)
 if next_update_info_datetime <= DateTime.now():

@@ -62,7 +62,7 @@ while True:
         if target_market != ki.GetCurrentCollectingType():
             ki.SyncPartitions()
             ki.SyncDailyInfo(target_market)
-   
+
     except Exception as ex:
         util.InsertLog("Main", "E", f"Main loop error [ {ex.__str__()} ]")
 

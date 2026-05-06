@@ -7,7 +7,7 @@ import pymysql
 import json
 import asyncio
 import aiomysql
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 import os
 import pandas as pd
 import urllib.request
@@ -16,7 +16,6 @@ import glob
 import zipfile
 import time
 from datetime import datetime as DateTime
-from datetime import timedelta as TimeDelta
 
 
 class ApiKoreaInvestType:
@@ -35,10 +34,29 @@ class ApiKoreaInvestType:
 
     __ws_query_type:str = ""
     __ws_ex_excution_last_volume:dict = {}
+    # KIS 가 MAX SUBSCRIBE OVER 응답한 (stock_api_stock_code, stock_api_type) 튜플의 set.
+    # 한 번 거절된 종목은 이후 sync 분배에서 영구 제외 (프로세스 재시작 시 초기화).
+    __ws_blocked_keys:set = set()
 
-    __MAX_REST_API_COUNT_PER_KEY:int = 20
+    __MAX_REST_API_COUNT_PER_KEY:int = 18
     __MAX_WS_QUERY_COUNT_PER_KEY:int = 40
-    __REST_API_DELAY_MICRO:int = 30000
+    # TEMP: KIS 신규 신청 3일 quota 제한 (approval_key 당 동시 구독 3개). 풀린 후 아래 한 줄 주석 처리.
+    # ([korea_invest.py] 의 분배 비교가 ">" 라서 실제 cap = 값+1. 따라서 값 2 → WS 당 정확히 3개 등록.)
+    __MAX_WS_QUERY_COUNT_PER_KEY:int = 2
+    __REST_API_DELAY_MICRO:int = 50000
+    __AUTH_ISSUE_MIN_INTERVAL_SEC:float = 1.1
+    __WS_APPROVAL_TIMEOUT:tuple = (3.05, 10)
+    __WS_RECONNECT_BACKOFF_MAX_SEC:int = 600
+    __WS_STABLE_CONNECT_SEC:int = 60
+    __WS_BAN_SUSPECT_THRESHOLD:int = 10
+    __WS_PING_INTERVAL_SEC:int = 30
+    __WS_PING_TIMEOUT_SEC:int = 10
+    __WS_SEND_GAP_SEC:float = 0.15
+
+    __token_issue_lock:Lock = Lock()
+    __token_issue_last_at:DateTime = DateTime.min
+    __approval_issue_lock:Lock = Lock()
+    __approval_issue_last_at:DateTime = DateTime.min
 
 
     ##########################################################################
@@ -81,6 +99,29 @@ class ApiKoreaInvestType:
     def __reconnect(self) -> None:
         self.__sql_common_connection.ping(reconnect=True)
         config.set_session_timeouts(self.__sql_common_connection)
+
+    # 한국투자증권 공지: /oauth2/tokenP, /oauth2/Approval 모두 1초당 1건 한도.
+    # 다중 키 동시 만료/재연결 상황에서도 글로벌 1Hz 직렬화 보장.
+    def __throttle_auth_issue(self, kind:str) -> None:
+        if kind == "token":
+            lock = ApiKoreaInvestType.__token_issue_lock
+        else:
+            lock = ApiKoreaInvestType.__approval_issue_lock
+        lock.acquire()
+        try:
+            if kind == "token":
+                last_at = ApiKoreaInvestType.__token_issue_last_at
+            else:
+                last_at = ApiKoreaInvestType.__approval_issue_last_at
+            elapsed = (DateTime.now() - last_at).total_seconds()
+            if elapsed < self.__AUTH_ISSUE_MIN_INTERVAL_SEC:
+                time.sleep(self.__AUTH_ISSUE_MIN_INTERVAL_SEC - elapsed)
+            if kind == "token":
+                ApiKoreaInvestType.__token_issue_last_at = DateTime.now()
+            else:
+                ApiKoreaInvestType.__approval_issue_last_at = DateTime.now()
+        finally:
+            lock.release()
 
     def __execute_sync_query(self, query:str, params=None):
         for attempt in range(1, config.SQL_MAX_RETRY + 1):
@@ -179,28 +220,75 @@ class ApiKoreaInvestType:
         self.__ws_app_info_list = []
         for api_key in self.__api_key_list:
             ws_name = f"KoreaInvest_WS_{len(self.__ws_app_info_list)}"
+            # 매 연결마다 새 APPROVAL_KEY 를 발급한다 (재사용 금지).
+            # 시작 시 미리 발급해 두지 않으면, ws 가 안정적으로 open 되어 reconnect 루프가 돌지 않을 때
+            # APPROVAL_KEY 가 영원히 빈 채로 남아 sync 의 send 가드에 걸려 구독 메시지가 송신되지 않는다.
+            approval_key = ""
+            try:
+                self.__throttle_auth_issue("approval")
+                response = requests.post(
+                    url = self.__API_BASE_URL + "/oauth2/Approval",
+                    headers = {"content-type": "application/json; utf-8"},
+                    data = json.dumps({
+                        "grant_type" : "client_credentials",
+                        "appkey" : api_key["KEY"],
+                        "secretkey" : api_key["SECRET"],
+                    }),
+                    timeout = self.__WS_APPROVAL_TIMEOUT,
+                )
+                response.raise_for_status()
+                rep_json = response.json()
+                if "approval_key" in rep_json:
+                    approval_key = rep_json["approval_key"]
+                    self.__save_approval_key(api_key["KEY"], approval_key)
+                    util.InsertLog(
+                        "ApiKoreaInvest",
+                        "N",
+                        f"Issued approval key on startup [ {ws_name} | key={approval_key[:8]}.. | http={response.status_code} ]"
+                    )
+                else:
+                    util.InsertLog(
+                        "ApiKoreaInvest",
+                        "E",
+                        f"Approval key missing on startup [ {ws_name} | http={response.status_code} | {response.text[:200]} ]"
+                    )
+            except Exception as ex:
+                util.InsertLog(
+                    "ApiKoreaInvest",
+                    "E",
+                    f"Fail to issue approval key on startup [ {ws_name} | {ex.__str__()} ]"
+                )
+
             ws_app = WebSocketApp(
                 url= "ws://ops.koreainvestment.com:21000",
                 on_message= self.__on_ws_recv_message,
                 on_open= self.__on_ws_open,
                 on_close= self.__on_ws_close,
+                on_error= self.__on_ws_error,
             )
             ws_thread = Thread(
                 name= ws_name,
-                target= ws_app.run_forever
+                target= ws_app.run_forever,
+                kwargs= {
+                    "ping_interval": self.__WS_PING_INTERVAL_SEC,
+                    "ping_timeout": self.__WS_PING_TIMEOUT_SEC,
+                },
             )
             ws_thread.daemon = True
             ws_thread.start()
             self.__ws_app_info_list.append({
                 "API_KEY" : api_key["KEY"],
                 "API_SECRET" : api_key["SECRET"],
-                "APPROVAL_KEY" : "",
+                "APPROVAL_KEY" : approval_key,
                 "WS_NAME" : ws_name,
                 "WS_APP" : ws_app,
                 "WS_THREAD" : ws_thread,
                 "WS_IS_OPENED" : False,
                 "WS_KEEP_CONNECT" : True,
                 "WS_QUERY_LIST" : [],
+                "WS_LAST_CONNECT_ATTEMPT" : DateTime.min,
+                "WS_OPENED_AT" : DateTime.min,
+                "WS_RECONNECT_FAIL_COUNT" : 0,
             })
 
 
@@ -984,52 +1072,160 @@ class ApiKoreaInvestType:
 
                 else:
                     rt_cd = msg_json["body"]["rt_cd"]
+                    msg1 = msg_json["body"].get("msg1", "")
+                    tr_id = msg_json["header"].get("tr_id", "")
+                    tr_key = msg_json["header"].get("tr_key", "")
+                    ws_name = next(
+                        (info["WS_NAME"] for info in self.__ws_app_info_list if info["WS_APP"] == ws),
+                        "?"
+                    )
 
                     if rt_cd != '0':
-                        util.InsertLog("ApiKoreaInvest", "E", "Error msg : [ %s ][ %s ][ %s ]"%(msg_json["header"]["tr_key"], rt_cd, msg_json["body"]["msg1"]))
+                        util.InsertLog(
+                            "ApiKoreaInvest",
+                            "E",
+                            f"Server response error [ {ws_name} | {tr_key}:{tr_id} | rt_cd={rt_cd} | {msg1} ]"
+                        )
+                        if "MAX SUBSCRIBE OVER" in msg1.upper():
+                            self.__ws_blocked_keys.add((tr_key, tr_id))
+                            util.InsertLog(
+                                "ApiKoreaInvest",
+                                "W",
+                                f"Blocked subscription added [ {tr_key}:{tr_id} | total_blocked={len(self.__ws_blocked_keys)} ]"
+                            )
+                    else:
+                        util.InsertLog(
+                            "ApiKoreaInvest",
+                            "N",
+                            f"Server response ok [ {ws_name} | {tr_key}:{tr_id} | {msg1} ]"
+                        )
 
         except Exception as e:
             util.InsertLog("ApiKoreaInvest", "E", "Fail to process ws recv msg : " + e.__str__())
     
+    # tr_type "1": 등록(subscribe), "2": 해제(unsubscribe)
+    def __send_ws_subscription(self, ws_app_info:dict, query_info:dict, tr_type:str) -> bool:
+        try:
+            msg = {
+                "header" : {
+                    "approval_key": ws_app_info["APPROVAL_KEY"],
+                    "content-type": "utf-8",
+                    "custtype": "P",
+                    "tr_type": tr_type
+                },
+                "body" : {
+                    "input": {
+                        "tr_id": query_info["stock_api_type"],
+                        "tr_key": query_info["stock_api_stock_code"]
+                    }
+                }
+            }
+            ws_app_info["WS_APP"].send(json.dumps(msg))
+            action = "register" if tr_type == "1" else "unregister"
+            util.InsertLog(
+                "ApiKoreaInvest",
+                "N",
+                f"Sent ws subscription [ {ws_app_info['WS_NAME']} | {action} | {query_info.get('stock_api_stock_code')}:{query_info.get('stock_api_type')} ]"
+            )
+            return True
+        except Exception as e:
+            action = "register" if tr_type == "1" else "unregister"
+            util.InsertLog(
+                "ApiKoreaInvest",
+                "E",
+                f"Fail to {action} ws subscription [ {ws_app_info['WS_NAME']} | {query_info.get('stock_api_stock_code')}:{query_info.get('stock_api_type')} | {e.__str__()} ]"
+            )
+            return False
+
     def __on_ws_open(self, ws:WebSocketApp) -> None:
         for ws_app_info in self.__ws_app_info_list:
             if ws_app_info["WS_APP"] != ws: continue
             ws_app_info["WS_IS_OPENED"] = True
+            ws_app_info["WS_OPENED_AT"] = DateTime.now()
+
+            sub_count = len(ws_app_info["WS_QUERY_LIST"])
+            util.InsertLog(
+                "ApiKoreaInvest",
+                "N",
+                f"Opened korea invest websocket [ {ws_app_info['WS_NAME']} | initial_subs={sub_count} ]"
+            )
 
             for query_info in ws_app_info["WS_QUERY_LIST"]:
-                try:
-                    msg = {
-                        "header" : {
-                            "approval_key": ws_app_info["APPROVAL_KEY"],
-                            "content-type": "utf-8",
-                            "custtype": "P",
-                            "tr_type": "1"
-                        },
-                        "body" : {
-                            "input": {
-                                "tr_id": query_info["stock_api_type"],
-                                "tr_key": query_info["stock_api_stock_code"]
-                            }
-                        }
-                    }
-                    ws.send(json.dumps(msg))
+                self.__send_ws_subscription(ws_app_info, query_info, "1")
+                time.sleep(self.__WS_SEND_GAP_SEC)
 
-                except Exception as e:
-                    util.InsertLog("ApiKoreaInvest", "E", f"Fail to process ws send msg [ {ws_app_info['WS_NAME']} | {e.__str__()} ] ")
-
-                time.sleep(0.5)
-
-            util.InsertLog("ApiKoreaInvest", "N", f"Opened korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+            util.InsertLog(
+                "ApiKoreaInvest",
+                "N",
+                f"Initial subscriptions sent [ {ws_app_info['WS_NAME']} | count={sub_count} ]"
+            )
             break
+
+    def __on_ws_error(self, ws, error) -> None:
+        ws_name = next(
+            (info["WS_NAME"] for info in self.__ws_app_info_list if info["WS_APP"] == ws),
+            "?"
+        )
+        util.InsertLog(
+            "ApiKoreaInvest",
+            "E",
+            f"Websocket error [ {ws_name} | type={type(error).__name__} | {str(error)[:300]} ]"
+        )
 
     def __on_ws_close(self, ws:WebSocketApp, close_code, close_msg) -> None:
         for ws_app_info in self.__ws_app_info_list:
             if ws_app_info["WS_APP"] != ws: continue
             ws_app_info["WS_IS_OPENED"] = False
+            ws_name = ws_app_info["WS_NAME"]
 
+            # 직전 연결이 충분히 오래 유지되었는지 판정 (단명 연결은 실패로 간주)
+            opened_at = ws_app_info["WS_OPENED_AT"]
+            if opened_at != DateTime.min:
+                connection_lifetime = (DateTime.now() - opened_at).total_seconds()
+            else:
+                connection_lifetime = 0
+            ws_app_info["WS_OPENED_AT"] = DateTime.min
+
+            util.InsertLog(
+                "ApiKoreaInvest",
+                "W",
+                f"Websocket closed [ {ws_name} | code={close_code}, msg={str(close_msg)} | lifetime={connection_lifetime:.1f}s | fail_count={ws_app_info['WS_RECONNECT_FAIL_COUNT']} ]"
+            )
+
+            if connection_lifetime >= self.__WS_STABLE_CONNECT_SEC:
+                ws_app_info["WS_RECONNECT_FAIL_COUNT"] = 0
+            else:
+                # 단명 연결(핸드셰이크 거부 포함) 은 실패로 간주하여 fail_count 증가 → 백오프 활성화
+                ws_app_info["WS_RECONNECT_FAIL_COUNT"] += 1
+
+            fail_count = ws_app_info["WS_RECONNECT_FAIL_COUNT"]
+            elapsed = (DateTime.now() - ws_app_info["WS_LAST_CONNECT_ATTEMPT"]).total_seconds()
+            already_waited = max(0, elapsed)
+            reconnect_attempt = 0
+            # 연속 실패가 임계치에 도달한 시점에 한 번만 의심 로그 (자동 ban 처리는 하지 않음)
+            if fail_count == self.__WS_BAN_SUSPECT_THRESHOLD:
+                util.InsertLog(
+                    "ApiKoreaInvest",
+                    "E",
+                    f"Suspected ban — fail_count reached threshold [ {ws_name} | fail_count={fail_count} ] (manual intervention recommended)"
+                )
             while ws_app_info["WS_KEEP_CONNECT"] == True:
-                time.sleep(1)
+                wait_sec = max(0, min(2 ** fail_count, self.__WS_RECONNECT_BACKOFF_MAX_SEC) - already_waited)
+                already_waited = 0
+                if wait_sec > 0:
+                    util.InsertLog("ApiKoreaInvest", "W", f"Reconnect waiting {wait_sec:.0f}s [ {ws_name} | fail_count={fail_count} ]")
+                # 인터럽트 가능한 분할 sleep
+                slept = 0
+                while ws_app_info["WS_KEEP_CONNECT"] == True and slept < wait_sec:
+                    chunk = min(5, wait_sec - slept)
+                    time.sleep(chunk)
+                    slept += chunk
+                if ws_app_info["WS_KEEP_CONNECT"] != True:
+                    break
+
+                ws_app_info["WS_LAST_CONNECT_ATTEMPT"] = DateTime.now()
                 try:
+                    # 매 연결 시도마다 APPROVAL_KEY 를 새로 발급한다 (재사용 금지).
                     api_url = "/oauth2/Approval"
                     api_header = {
                         "content-type" : "application/json; utf-8"
@@ -1039,35 +1235,81 @@ class ApiKoreaInvestType:
                         "appkey" : ws_app_info["API_KEY"],
                         "secretkey" : ws_app_info["API_SECRET"],
                     }
-                    response = requests.post (
+                    self.__throttle_auth_issue("approval")
+                    response = requests.post(
                         url = self.__API_BASE_URL + api_url,
                         headers = api_header,
                         data = json.dumps(api_body),
+                        timeout = self.__WS_APPROVAL_TIMEOUT,
                     )
+                    response.raise_for_status()
 
-                    rep_json = json.loads(response.text)
+                    rep_json = response.json()
+                    if "approval_key" not in rep_json:
+                        raise Exception(f"Approval key is missing [ {response.text[:200]} ]")
+
                     ws_app_info["APPROVAL_KEY"] = rep_json["approval_key"]
+                    self.__save_approval_key(ws_app_info["API_KEY"], ws_app_info["APPROVAL_KEY"])
+                    util.InsertLog(
+                        "ApiKoreaInvest",
+                        "N",
+                        f"Issued approval key [ {ws_name} | key={ws_app_info['APPROVAL_KEY'][:8]}.. | http={response.status_code} ]"
+                    )
                     ws_app_info["WS_APP"] = WebSocketApp(
                         url = "ws://ops.koreainvestment.com:21000",
                         on_message= self.__on_ws_recv_message,
                         on_open= self.__on_ws_open,
                         on_close= self.__on_ws_close,
+                        on_error= self.__on_ws_error,
                     )
                     ws_app_info["WS_THREAD"] = Thread(
                         name= ws_app_info["WS_NAME"],
-                        target= ws_app_info["WS_APP"].run_forever
+                        target= ws_app_info["WS_APP"].run_forever,
+                        kwargs= {
+                            "ping_interval": self.__WS_PING_INTERVAL_SEC,
+                            "ping_timeout": self.__WS_PING_TIMEOUT_SEC,
+                        },
                     )
                     ws_app_info["WS_THREAD"].daemon = True
                     ws_app_info["WS_THREAD"].start()
-     
-                    util.InsertLog("ApiKoreaInvest", "N", f"Reconnected korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+
+                    # 주의: 여기서 fail_count를 즉시 0으로 리셋하지 않는다.
+                    # 서버가 핸드셰이크 직후 끊는 경우를 단명 연결로 감지하기 위해
+                    # 다음 __on_ws_close 진입 시 WS_OPENED_AT 기준으로 리셋한다.
+                    util.InsertLog("ApiKoreaInvest", "N", f"Reconnect started [ {ws_name} | attempt={reconnect_attempt + 1} | fail_count={fail_count} ]")
                     break
-       
+
                 except Exception as ex:
-                    util.InsertLog("ApiKoreaInvest", "E", f"Fail to reconnect korea invest websocket [ {ws_app_info['WS_NAME']} | {ex.__str__()} ]")
-   
-            util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_app_info['WS_NAME']} ]")
+                    fail_count += 1
+                    ws_app_info["WS_RECONNECT_FAIL_COUNT"] = fail_count
+                    util.InsertLog(
+                        "ApiKoreaInvest",
+                        "E",
+                        f"Fail to reconnect korea invest websocket [ {ws_name} | attempt={reconnect_attempt + 1} | wait={wait_sec:.0f}s | fail_count={fail_count} | {ex.__str__()} ]"
+                    )
+                    # 3회 실패 시 APPROVAL_KEY 초기화하여 다음 시도에서 재발급
+                    if fail_count >= 3:
+                        ws_app_info["APPROVAL_KEY"] = ""
+                        self.__save_approval_key(ws_app_info["API_KEY"], "")
+                    reconnect_attempt += 1
+
+            util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_name} ]")
             break
+
+
+    def __save_approval_key(self, api_key: str, approval_key: str) -> None:
+        try:
+            file_data = korea_invest_token_info.load_last_token_info()
+            entry = file_data.get(api_key, {})
+            entry["APPROVAL_KEY"] = approval_key
+            if approval_key:
+                entry["APPROVAL_KEY_ISSUED_AT"] = DateTime.now().strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                entry.pop("APPROVAL_KEY_ISSUED_AT", None)
+            file_data[api_key] = entry
+            korea_invest_token_info.save_last_token_info(file_data)
+        except:
+            pass
 
 
     ##########################################################################
@@ -1112,6 +1354,7 @@ class ApiKoreaInvestType:
                     "appkey" : rest_api_token["API_KEY"],
                     "appsecret" : rest_api_token["API_SECRET"],
                 }
+                self.__throttle_auth_issue("token")
                 response = requests.post (
                     url = self.__API_BASE_URL + api_url,
                     data = json.dumps(api_body),
@@ -1133,13 +1376,20 @@ class ApiKoreaInvestType:
             except: raise Exception(f"Get New Token | {rest_api_token['API_KEY']}")
 
         try:
+            file_data = korea_invest_token_info.load_last_token_info()
+        except:
             file_data = {}
+
+        try:
             for rest_api_token in self.__rest_api_token_list:
-                file_data[rest_api_token["API_KEY"]] = {
+                key = rest_api_token["API_KEY"]
+                entry = file_data.get(key, {})
+                entry.update({
                     "TOKEN_TYPE" : rest_api_token["TOKEN_TYPE"],
                     "TOKEN_VAL" : rest_api_token["TOKEN_VAL"],
                     "TOKEN_EXPIRED_DATETIME" : rest_api_token["TOKEN_EXPIRED_DATETIME"].strftime("%Y-%m-%d %H:%M:%S"),
-                }
+                })
+                file_data[key] = entry
 
             korea_invest_token_info.save_last_token_info(file_data)
 
@@ -1255,6 +1505,9 @@ class ApiKoreaInvestType:
             temp_list = [[] for _ in range(len(self.__ws_app_info_list))]
             app_idx = 0
             for sql_query in sql_query_list:
+                # KIS 가 한 번이라도 MAX SUBSCRIBE OVER 응답한 종목은 분배 자체에서 제외
+                if (sql_query[3], sql_query[2]) in self.__ws_blocked_keys:
+                    continue
                 if len(temp_list[app_idx]) > self.__MAX_WS_QUERY_COUNT_PER_KEY:
                     util.InsertLog("ApiKoreaInvest", "E", f"WS query was overflowed ( {sql_query[0]} : {sql_query[2]} )")
                 else:
@@ -1264,15 +1517,49 @@ class ApiKoreaInvestType:
                         "stock_api_type" : sql_query[2],
                         "stock_api_stock_code" : sql_query[3]
                     })
-                
+
                 app_idx += 1
                 if app_idx >= len(self.__ws_app_info_list):
                     app_idx = 0
      
+            # 종목 변경분만 unsub/sub delta 메시지로 전송하여 WS 연결을 유지한다.
+            # (기존 구현은 close() 후 reconnect로 전체 재구독했으나, 이는 한국투자증권의
+            #  '무한 연결시도' 차단 정책에 가까워질 수 있어 delta 방식으로 전환.)
+            def _key(q:dict) -> tuple:
+                return (q["stock_api_type"], q["stock_api_stock_code"])
+
             for idx in range(len(self.__ws_app_info_list)):
-                self.__ws_app_info_list[idx]["WS_QUERY_LIST"] = temp_list[idx]
-                self.__ws_app_info_list[idx]["WS_APP"].close()
-   
+                ws_app_info = self.__ws_app_info_list[idx]
+                new_list = temp_list[idx]
+                old_list = ws_app_info["WS_QUERY_LIST"]
+                old_keys = {_key(q) for q in old_list}
+                new_keys = {_key(q) for q in new_list}
+
+                removed = [q for q in old_list if _key(q) not in new_keys]
+                added = [q for q in new_list if _key(q) not in old_keys]
+
+                # 새 리스트로 먼저 갱신 (재연결 시 on_open이 정확한 상태로 등록되도록)
+                ws_app_info["WS_QUERY_LIST"] = new_list
+
+                util.InsertLog(
+                    "ApiKoreaInvest",
+                    "N",
+                    f"Sync ws query list [ {ws_app_info['WS_NAME']} | total={len(new_list)} | removed={len(removed)} | added={len(added)} | opened={ws_app_info['WS_IS_OPENED']} ]"
+                )
+
+                # WS가 열려있고 승인키가 있을 때만 delta 메시지 송신.
+                # 닫혀 있으면 다음 on_open에서 새 리스트가 일괄 등록되므로 별도 처리 불필요.
+                if not (ws_app_info["WS_IS_OPENED"] and ws_app_info["APPROVAL_KEY"]):
+                    continue
+
+                # 41건 한도 보호: 해제 먼저, 그 다음 등록.
+                for q in removed:
+                    self.__send_ws_subscription(ws_app_info, q, "2")
+                    time.sleep(self.__WS_SEND_GAP_SEC)
+                for q in added:
+                    self.__send_ws_subscription(ws_app_info, q, "1")
+                    time.sleep(self.__WS_SEND_GAP_SEC)
+
         except: raise Exception("Fail to sync websocket query list")
     
 

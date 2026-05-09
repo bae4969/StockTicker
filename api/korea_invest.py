@@ -40,9 +40,6 @@ class ApiKoreaInvestType:
 
     __MAX_REST_API_COUNT_PER_KEY:int = 18
     __MAX_WS_QUERY_COUNT_PER_KEY:int = 40
-    # TEMP: KIS 신규 신청 3일 quota 제한 (approval_key 당 동시 구독 3개). 풀린 후 아래 한 줄 주석 처리.
-    # ([korea_invest.py] 의 분배 비교가 ">" 라서 실제 cap = 값+1. 따라서 값 2 → WS 당 정확히 3개 등록.)
-    __MAX_WS_QUERY_COUNT_PER_KEY:int = 2
     __REST_API_DELAY_MICRO:int = 50000
     __AUTH_ISSUE_MIN_INTERVAL_SEC:float = 1.1
     __WS_APPROVAL_TIMEOUT:tuple = (3.05, 10)

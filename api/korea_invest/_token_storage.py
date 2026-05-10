@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def _get_token_info_path() -> Path:
-    return Path(__file__).resolve().parent.parent / "config" / "last_token_info.json"
+    return Path(__file__).resolve().parent.parent.parent / "config" / "last_token_info.json"
 
 
 def load_last_token_info() -> dict:

@@ -1,4 +1,42 @@
-# SQL 재시도 관련 설정
+import json
+from pathlib import Path
+
+
+# ============================================================================
+# 런타임 설정 (config/settings.json)
+# ============================================================================
+
+def _load_settings() -> dict:
+    settings_path = Path(__file__).resolve().parent.parent / "config" / "settings.json"
+
+    if not settings_path.exists():
+        raise FileNotFoundError(
+            f"설정 파일이 없습니다: {settings_path}. config/settings.json 파일을 생성해 주세요."
+        )
+
+    with settings_path.open("r", encoding="utf-8") as fp:
+        return json.load(fp)
+
+
+_CONFIG = _load_settings()
+
+SQL_HOST = _CONFIG["SQL_HOST"]
+SQL_PORT = _CONFIG["SQL_PORT"]
+SQL_ID = _CONFIG["SQL_ID"]
+SQL_PW = _CONFIG["SQL_PW"]
+SQL_CHARSET = _CONFIG["SQL_CHARSET"]
+
+SQL_LOG_DB = _CONFIG["SQL_LOG_DB"]
+SQL_BH_DB = _CONFIG["SQL_BH_DB"]
+SQL_KI_DB = _CONFIG["SQL_KI_DB"]
+
+KI_API_KEY_LIST = _CONFIG["KI_API_KEY_LIST"]
+
+
+# ============================================================================
+# SQL 재시도 / 세션 타임아웃 상수
+# ============================================================================
+
 SQL_RETRYABLE_ERRORS = (2003, 2006, 2013, 1213, 1205)
 #   2003: Can't connect to MySQL server
 #   2006: MySQL server has gone away
@@ -13,7 +51,6 @@ SQL_RETRY_BACKOFF_MAX = 30
 SQL_SESSION_NET_READ_TIMEOUT = 3600
 SQL_SESSION_NET_WRITE_TIMEOUT = 3600
 SQL_SESSION_WAIT_TIMEOUT = 3600
-
 
 
 def set_session_timeouts(conn) -> None:

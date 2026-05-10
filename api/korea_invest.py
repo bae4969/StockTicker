@@ -41,6 +41,8 @@ class ApiKoreaInvestType:
     __MAX_REST_API_COUNT_PER_KEY:int = 18
     __MAX_WS_QUERY_COUNT_PER_KEY:int = 40
     __REST_API_DELAY_MICRO:int = 50000
+    __REST_API_TIMEOUT:tuple = (5, 15)
+    __REST_API_RETRY:int = 2
     __AUTH_ISSUE_MIN_INTERVAL_SEC:float = 1.1
     __WS_APPROVAL_TIMEOUT:tuple = (3.05, 10)
     __WS_RECONNECT_BACKOFF_MAX_SEC:int = 600
@@ -156,7 +158,7 @@ class ApiKoreaInvestType:
 
             self.__execute_sync_query(table_query_str)
 
-        except: raise Exception("Fail to create stock info table")
+        except Exception as e: raise Exception(f"Fail to create stock info table | {e}")
 
     def __create_last_ws_query_table(self) -> None:
         try:
@@ -174,7 +176,7 @@ class ApiKoreaInvestType:
                 )
             self.__execute_sync_query(create_table_query)
 
-        except: raise Exception("Fail to create last websocket query table")
+        except Exception as e: raise Exception(f"Fail to create last websocket query table | {e}")
 
     def __create_rest_api_token_list(self) -> None:
         try:
@@ -237,7 +239,6 @@ class ApiKoreaInvestType:
                 rep_json = response.json()
                 if "approval_key" in rep_json:
                     approval_key = rep_json["approval_key"]
-                    self.__save_approval_key(api_key["KEY"], approval_key)
                     util.InsertLog(
                         "ApiKoreaInvest",
                         "N",
@@ -757,7 +758,16 @@ class ApiKoreaInvestType:
 
 
     ##########################################################################
-        
+
+
+    def __safe_get(self, url:str, headers:dict, params:dict):
+        for attempt in range(self.__REST_API_RETRY + 1):
+            try:
+                return requests.get(url=url, headers=headers, params=params, timeout=self.__REST_API_TIMEOUT)
+            except requests.exceptions.ConnectionError:
+                if attempt == self.__REST_API_RETRY: raise
+                time.sleep(0.5)
+
 
     def __rest_api_kr_stock_info_dict(self, rest_api_token_header:dict, stock_code:str, stock_type:str, stock_market:str) -> dict:
         try:
@@ -768,8 +778,8 @@ class ApiKoreaInvestType:
                 "PRDT_TYPE_CD" : "300",
                 "PDNO" : stock_code,
             }
-  
-            response = requests.get (
+
+            response = self.__safe_get(
                 url = self.__API_BASE_URL + api_url,
                 headers= api_header,
                 params= api_para,
@@ -819,7 +829,7 @@ class ApiKoreaInvestType:
                     "PDNO" : stock_code,
                 }
         
-            response = requests.get (
+            response = self.__safe_get(
                 url = self.__API_BASE_URL + api_url,
                 headers= api_header,
                 params= api_para,
@@ -853,7 +863,7 @@ class ApiKoreaInvestType:
                     "SYMB" : stock_code,
                 }				
         
-            response = requests.get (
+            response = self.__safe_get(
                 url = self.__API_BASE_URL + api_url,
                 headers= api_header,
                 params= api_para,
@@ -890,12 +900,13 @@ class ApiKoreaInvestType:
         # "유가증권단축종목코드|주식체결시간|주식현재가|전일대비부호|전일대비|전일대비율|가중평균주식가격|주식시가|주식최고가|주식최저가|매도호가1|매수호가1|체결거래량|누적거래량|누적거래대금|매도체결건수|매수체결건수|순매수체결건수|체결강도|총매도수량|총매수수량|체결구분|매수비율|전일거래량대비등락율|시가시간|시가대비구분|시가대비|최고가시간|고가대비구분|고가대비|최저가시간|저가대비구분|저가대비|영업일자|신장운영구분코드|거래정지여부|매도호가잔량|매수호가잔량|총매도호가잔량|총매수호가잔량|거래량회전율|전일동시간누적거래량|전일동시간누적거래량비율|시간구분코드|임의종료구분코드|정적VI발동기준가"
         pValue = data.split('^')
         for data_idx in range(data_cnt):
+            stock_code = "?"
             try:
                 data_offset = 46 * data_idx
+                stock_code = pValue[data_offset + 0]
 
                 stock_execution_dt_str = DateTime.now().strftime("%Y%m%d") + pValue[data_offset + 1]
 
-                stock_code = pValue[data_offset + 0]
                 dt = DateTime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
                 price = float(pValue[data_offset + 2])
                 volume = float(pValue[data_offset + 12])
@@ -906,20 +917,21 @@ class ApiKoreaInvestType:
                     self.__update_stock_execution_table(stock_code, dt, price, 0, volume, 0)
                 else:
                     self.__update_stock_execution_table(stock_code, dt, price, volume, 0, 0)
-                    
+
             except Exception as e:
-                raise Exception("[ kr stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
+                util.InsertLog("ApiKoreaInvest", "E", "[ kr stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
     def __on_recv_ex_stock_execution(self, data_cnt:int, data:str) -> None:
         # "실시간종목코드|종목코드|수수점자리수|현지영업일자|현지일자|현지시간|한국일자|한국시간|시가|고가|저가|현재가|대비구분|전일대비|등락율|매수호가|매도호가|매수잔량|매도잔량|체결량|거래량|거래대금|매도체결량|매수체결량|체결강도|시장구분"
         pValue = data.split('^')
         for data_idx in range(data_cnt):
+            stock_code = "?"
             try:
                 data_offset = 26 * data_idx
+                stock_code = pValue[data_offset + 1]
 
                 stock_execution_dt_str = pValue[data_offset + 4] + pValue[data_offset + 5]
 
-                stock_code = pValue[data_offset + 1]
                 dt = DateTime.strptime(stock_execution_dt_str, "%Y%m%d%H%M%S")
                 price = float(pValue[data_offset + 11])
                 tot_volume = float(pValue[data_offset + 19])
@@ -949,7 +961,7 @@ class ApiKoreaInvestType:
                     self.__update_stock_execution_table(stock_code, dt, price, tot_volume, 0.0, 0.0)
 
             except Exception as e:
-                raise Exception("[ ex stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
+                util.InsertLog("ApiKoreaInvest", "E", "[ ex stock execution ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
     def __on_recv_kr_stock_orderbook(self, data:str) -> None:
         return
@@ -1246,7 +1258,6 @@ class ApiKoreaInvestType:
                         raise Exception(f"Approval key is missing [ {response.text[:200]} ]")
 
                     ws_app_info["APPROVAL_KEY"] = rep_json["approval_key"]
-                    self.__save_approval_key(ws_app_info["API_KEY"], ws_app_info["APPROVAL_KEY"])
                     util.InsertLog(
                         "ApiKoreaInvest",
                         "N",
@@ -1287,26 +1298,10 @@ class ApiKoreaInvestType:
                     # 3회 실패 시 APPROVAL_KEY 초기화하여 다음 시도에서 재발급
                     if fail_count >= 3:
                         ws_app_info["APPROVAL_KEY"] = ""
-                        self.__save_approval_key(ws_app_info["API_KEY"], "")
                     reconnect_attempt += 1
 
             util.InsertLog("ApiKoreaInvest", "N", f"Closed korea invest websocket [ {ws_name} ]")
             break
-
-
-    def __save_approval_key(self, api_key: str, approval_key: str) -> None:
-        try:
-            file_data = korea_invest_token_info.load_last_token_info()
-            entry = file_data.get(api_key, {})
-            entry["APPROVAL_KEY"] = approval_key
-            if approval_key:
-                entry["APPROVAL_KEY_ISSUED_AT"] = DateTime.now().strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                entry.pop("APPROVAL_KEY_ISSUED_AT", None)
-            file_data[api_key] = entry
-            korea_invest_token_info.save_last_token_info(file_data)
-        except:
-            pass
 
 
     ##########################################################################
@@ -1334,8 +1329,9 @@ class ApiKoreaInvestType:
                     response = requests.post (
                         url = self.__API_BASE_URL + api_url,
                         data = json.dumps(api_body),
+                        timeout = self.__REST_API_TIMEOUT,
                     )
-    
+
                     rest_api_token["TOKEN_TYPE"] = ""
                     rest_api_token["TOKEN_VAL"] = ""
                     rest_api_token["TOKEN_EXPIRED_DATETIME"] = DateTime.min
@@ -1355,6 +1351,7 @@ class ApiKoreaInvestType:
                 response = requests.post (
                     url = self.__API_BASE_URL + api_url,
                     data = json.dumps(api_body),
+                    timeout = self.__REST_API_TIMEOUT,
                 )
 
                 rep_json = json.loads(response.text)
@@ -1370,11 +1367,12 @@ class ApiKoreaInvestType:
                     "custtype" : "P"
                 }
     
-            except: raise Exception(f"Get New Token | {rest_api_token['API_KEY']}")
+            except Exception as e: raise Exception(f"Get New Token | {rest_api_token['API_KEY']} | {e}")
 
         try:
             file_data = korea_invest_token_info.load_last_token_info()
-        except:
+        except Exception as e:
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to reload token file before save [ {e} ]")
             file_data = {}
 
         try:
@@ -1390,7 +1388,7 @@ class ApiKoreaInvestType:
 
             korea_invest_token_info.save_last_token_info(file_data)
 
-        except: util.InsertLog("ApiKoreaInvest", "E", "Fail to create access token for KoreaInvest Api")
+        except Exception as e: util.InsertLog("ApiKoreaInvest", "E", f"Fail to create access token for KoreaInvest Api | {e}")
     
     def __sync_stock_info_table(self) -> None:
         try:
@@ -1494,7 +1492,7 @@ class ApiKoreaInvestType:
                      + "OR I.stock_market='AMEX'"
                 )
             else:
-                raise
+                raise Exception(f"Invalid ws_query_type [ {self.__ws_query_type} ]")
 
             cursor = self.__execute_sync_query(select_query)
             sql_query_list = cursor.fetchall()
@@ -1557,7 +1555,7 @@ class ApiKoreaInvestType:
                     self.__send_ws_subscription(ws_app_info, q, "1")
                     time.sleep(self.__WS_SEND_GAP_SEC)
 
-        except: raise Exception("Fail to sync websocket query list")
+        except Exception as e: raise Exception(f"Fail to sync websocket query list | {e}")
     
 
     ##########################################################################

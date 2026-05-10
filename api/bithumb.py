@@ -107,7 +107,7 @@ class ApiBithumbType:
 
             self.__execute_sync_query(table_query_str)
 
-        except: raise Exception("Fail to create coin info table")
+        except Exception as e: raise Exception(f"Fail to create coin info table | {e}")
 
     def __create_last_ws_query_table(self) -> None:
         try:
@@ -126,7 +126,7 @@ class ApiBithumbType:
             
             self.__execute_sync_query(create_table_query)
 
-        except: raise Exception("Fail to create last websocket query table")
+        except Exception as e: raise Exception(f"Fail to create last websocket query table | {e}")
 
 
     def __create_ws_app_info(self) -> None:
@@ -433,11 +433,12 @@ class ApiBithumbType:
 
     def __on_recv_coin_execution(self, msg_json:json) -> None:
         for data in msg_json["content"]["list"]:
+            coin_code = "?"
             try:
                 from_to = data["symbol"].split("_")
+                coin_code = from_to[0]
                 dt_str = data["contDtm"].split(".")
 
-                coin_code = from_to[0]
                 dt = DateTime.strptime(dt_str[0], "%Y-%m-%d %H:%M:%S")
                 price = float(data["contPrice"])
                 volume = float(data["contQty"])
@@ -450,7 +451,7 @@ class ApiBithumbType:
                     self.__update_coin_execution_table(coin_code, dt, price, volume, 0, 0)
 
             except Exception as e:
-                raise Exception("[ coin execution ][ %s ][ %s ]"%(coin_code, e.__str__()))
+                util.InsertLog("ApiBithumb", "E", "[ coin execution ][ %s ][ %s ]"%(coin_code, e.__str__()))
 
     def __on_recv_coin_orderbook(self, msg_json:json) -> None:
         return
@@ -621,7 +622,7 @@ class ApiBithumbType:
             self.__ws_query_list = temp_list
             self.__ws_app.close()
 
-        except: raise Exception("Fail to load last websocket query table")
+        except Exception as e: raise Exception(f"Fail to load last websocket query table | {e}")
  
 
     ##########################################################################

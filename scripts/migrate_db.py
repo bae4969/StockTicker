@@ -33,7 +33,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import config
-import core.settings as Settings
 
 
 def reconnect_and_get_cursor(conn):
@@ -44,11 +43,11 @@ def reconnect_and_get_cursor(conn):
 
 def get_connection():
     conn = pymysql.connect(
-        host=Settings.SQL_HOST,
-        port=Settings.SQL_PORT,
-        user=Settings.SQL_ID,
-        passwd=Settings.SQL_PW,
-        charset=Settings.SQL_CHARSET,
+        host=config.SQL_HOST,
+        port=config.SQL_PORT,
+        user=config.SQL_ID,
+        passwd=config.SQL_PW,
+        charset=config.SQL_CHARSET,
         autocommit=True,
         connect_timeout=30,
         read_timeout=config.SQL_SESSION_NET_READ_TIMEOUT,

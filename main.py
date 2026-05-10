@@ -1,7 +1,8 @@
-import core.settings as Settings
+from core import config
 from core import util
 from api.korea_invest import ApiKoreaInvestType as API_KI
 from api.bithumb import ApiBithumbType as API_BH
+import signal
 import time
 from threading import Thread
 from datetime import datetime as DateTime
@@ -9,29 +10,29 @@ from datetime import timedelta as TimeDelta
 
 
 util.Init(
-    Settings.SQL_HOST,
-    Settings.SQL_PORT,
-    Settings.SQL_ID,
-    Settings.SQL_PW,
-    Settings.SQL_LOG_DB,
-    Settings.SQL_CHARSET,
+    config.SQL_HOST,
+    config.SQL_PORT,
+    config.SQL_ID,
+    config.SQL_PW,
+    config.SQL_LOG_DB,
+    config.SQL_CHARSET,
 )
 bh = API_BH(
-    Settings.SQL_HOST,
-    Settings.SQL_PORT,
-    Settings.SQL_ID,
-    Settings.SQL_PW,
-    Settings.SQL_BH_DB,
-    Settings.SQL_CHARSET,
+    config.SQL_HOST,
+    config.SQL_PORT,
+    config.SQL_ID,
+    config.SQL_PW,
+    config.SQL_BH_DB,
+    config.SQL_CHARSET,
 )
 ki = API_KI(
-    Settings.SQL_HOST,
-    Settings.SQL_PORT,
-    Settings.SQL_ID,
-    Settings.SQL_PW,
-    Settings.SQL_KI_DB,
-    Settings.SQL_CHARSET,
-    Settings.KI_API_KEY_LIST,
+    config.SQL_HOST,
+    config.SQL_PORT,
+    config.SQL_ID,
+    config.SQL_PW,
+    config.SQL_KI_DB,
+    config.SQL_CHARSET,
+    config.KI_API_KEY_LIST,
 )
 
 next_update_info_datetime = DateTime.now().replace(hour=8, minute=0, second=0, microsecond=0)
@@ -40,7 +41,17 @@ next_update_info_datetime += TimeDelta(days=days_until_sunday)
 if next_update_info_datetime <= DateTime.now():
     next_update_info_datetime += TimeDelta(days=7)
 
-while True:
+stop_requested = False
+
+def _on_shutdown_signal(signum, _frame):
+    global stop_requested
+    stop_requested = True
+    util.InsertLog("Main", "N", f"Shutdown signal received [ {signal.Signals(signum).name} ]")
+
+signal.signal(signal.SIGTERM, _on_shutdown_signal)
+signal.signal(signal.SIGINT, _on_shutdown_signal)
+
+while not stop_requested:
     time.sleep(2)
     try:
         kr_min_datetime = DateTime.now().replace(hour=8, minute=0, second=0)

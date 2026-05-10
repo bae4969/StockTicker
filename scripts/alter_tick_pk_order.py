@@ -23,7 +23,6 @@ import pymysql
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import config
-import core.settings as Settings
 
 
 def get_connection():
@@ -31,11 +30,11 @@ def get_connection():
     for attempt in range(1, config.SQL_MAX_RETRY + 1):
         try:
             conn = pymysql.connect(
-                host=Settings.SQL_HOST,
-                port=Settings.SQL_PORT,
-                user=Settings.SQL_ID,
-                passwd=Settings.SQL_PW,
-                charset=Settings.SQL_CHARSET,
+                host=config.SQL_HOST,
+                port=config.SQL_PORT,
+                user=config.SQL_ID,
+                passwd=config.SQL_PW,
+                charset=config.SQL_CHARSET,
                 autocommit=True,
                 connect_timeout=30,
                 read_timeout=config.SQL_SESSION_NET_READ_TIMEOUT,

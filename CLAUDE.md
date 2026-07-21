@@ -9,15 +9,16 @@
 - **모드·고정 파이프라인 없음** — `/full` 같은 모드도, 4단계 강제도 없다. 요청 성격에 맞춰 메인이 판단해 처리한다.
 - **두 폴더 + 진입점만** — `.claude/rules/` + `.claude/memory/` + 본 `CLAUDE.md`. 이식은 이 셋만 복사하면 끝(외부 CLI·인증·플래그 불필요).
 
-## 모든 세션 시작 시 — git 이력으로 맥락 잡기
+## 모든 세션 시작 시 — git 이력 + memory로 맥락 잡기
 
-무거운 상태 파일 대신 **git 이력이 세션 재개의 진실의 원천(SoT)**이다. 세션을 시작하면(또는 맥락이 필요하면):
+무거운 상태 파일 대신 **git 이력이 세션 재개의 진실의 원천(SoT)**이고, **memory가 코드·git이 말해주지 않는 사실**을 채운다. 세션을 시작하면(또는 맥락이 필요하면):
 
 1. `git log --oneline -10` — 최근 작업 흐름을 읽는다.
 2. `git status` — 커밋 안 된 변경(작업하다 만 흔적)이 있는지 확인한다.
-3. 진행 중이던 작업이 보이면, 새 요청을 바로 덮지 말고 이어서 할지 한 줄로 확인한다.
+3. **`.claude/memory/MEMORY.md` 인덱스** — 훅이 지금 작업과 관련되면 그 파일을 Read한다. 인덱스는 import로 실리지만 **개별 memory 파일은 안 실린다**(아래 "rules / memory 두 폴더").
+4. 진행 중이던 작업이 보이면, 새 요청을 바로 덮지 말고 이어서 할지 한 줄로 확인한다.
 
-자세한 절차·예외(git 미초기화 등)는 [.claude/rules/git_history.md](.claude/rules/git_history.md) 참조.
+자세한 절차·예외는 [.claude/rules/git_history.md](.claude/rules/git_history.md)(git 미초기화 등)·[.claude/rules/memory.md](.claude/rules/memory.md)(memory 읽기) 참조.
 
 ## 작업 흐름 — 원문요청 → 계획 → 승인 → 진행 → 검증 → 요약
 
@@ -37,10 +38,14 @@
 
 사용자의 글로벌 `~/.claude/`와 같은 2폴더 규약을 그대로 쓴다:
 
-| 폴더 | 역할 | 판단 기준 | 인덱스(자동 로딩) |
-|---|---|---|---|
-| `.claude/rules/` | 행동 지시 | "~해라" / "~하지 마라" | `RULES.md` |
-| `.claude/memory/` | 사실 기록 | "~이다" / "~였다" | `MEMORY.md` |
+| 폴더 | 역할 | 판단 기준 | 인덱스 | 어떻게 로딩되나 |
+|---|---|---|---|---|
+| `.claude/rules/` | 행동 지시 | "~해라" / "~하지 마라" | `RULES.md` | Claude Code가 `rules/**/*.md`를 전부 자동 로딩 |
+| `.claude/memory/` | 사실 기록 | "~이다" / "~였다" | `MEMORY.md` | **자동 아님** — 인덱스만 아래 import로 싣는다 |
+
+`.claude/memory/`에는 자동 로딩 기전이 없다(rules/를 흉내 낸 폴더지만 Claude Code에 대응 기능이 없다). 그래서 인덱스를 아래 import로 싣고, **인덱스 안의 마크다운 링크는 import가 아니라 딸려오지 않으므로** 개별 memory 파일은 훅을 보고 Read한다 — 읽기 절차의 SoT는 [.claude/rules/memory.md](.claude/rules/memory.md).
+
+@.claude/memory/MEMORY.md
 
 - 새 **행동 규칙**이 생기면 `rules/`에 파일 추가 + `RULES.md`에 한 줄.
 - 알아둘 **사실**(프로젝트 상태·설정·참조·결정 배경)이 생기면 `memory/`에 파일 추가 + `MEMORY.md`에 한 줄.

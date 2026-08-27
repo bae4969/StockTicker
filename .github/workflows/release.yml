@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  APP_DIR: /mnt/10.project/10.StockTicker
+  APP_DIR: /mnt/10.project/23.stock_ticker
   DEPLOY_BRANCH: main
 
 jobs:

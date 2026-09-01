@@ -41,6 +41,31 @@ class _AuthThrottle:
             lock.release()
 
 
+class _RestThrottle:
+    # 한국투자증권 시세조회 REST 는 API 키당 1초 20건 한도 (초과 시 EGW00201).
+    #
+    # 종목마스터 주간 싱크와 지수·환율 폴링이 같은 키를 공유하므로, 호출부마다 sleep 을 두면
+    # 서로의 소비량을 모른 채 합계가 한도를 넘는다. 그래서 키 단위로 여기 한 곳에서 직렬화한다.
+    # 간격은 기존 주간 싱크가 쓰던 값과 동일하게 맞춰, 기존 부하 프로파일을 바꾸지 않는다.
+    __key_lock_dict: dict = {}
+    __key_last_call_at_dict: dict = {}
+    __dict_lock: Lock = Lock()
+
+    @classmethod
+    def throttle(cls, api_key: str, min_interval_sec: float) -> None:
+        with _RestThrottle.__dict_lock:
+            if api_key not in _RestThrottle.__key_lock_dict:
+                _RestThrottle.__key_lock_dict[api_key] = Lock()
+                _RestThrottle.__key_last_call_at_dict[api_key] = DateTime.min
+            key_lock = _RestThrottle.__key_lock_dict[api_key]
+
+        with key_lock:
+            elapsed = (DateTime.now() - _RestThrottle.__key_last_call_at_dict[api_key]).total_seconds()
+            if elapsed < min_interval_sec:
+                time.sleep(min_interval_sec - elapsed)
+            _RestThrottle.__key_last_call_at_dict[api_key] = DateTime.now()
+
+
 class KoreaInvestRestClient:
     API_BASE_URL: str = "https://openapi.koreainvestment.com:9443"
 
@@ -333,9 +358,17 @@ class KoreaInvestRestClient:
         except Exception as e:
             raise Exception("[ ex stock info ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
+    def rest_min_interval_sec(self) -> float:
+        # 키당 허용 호출 간격. 기존 주간 싱크가 쓰던 계산식을 그대로 쓴다.
+        return 1.0 / self.MAX_REST_API_COUNT_PER_KEY + self.REST_API_DELAY_MICRO / 1000000.0
+
     def __safe_get(self, url: str, headers: dict, params: dict):
+        # 유량 제어는 호출부가 아니라 여기서 키 단위로 건다 (주간 싱크·폴링이 같은 예산을 공유).
+        api_key = headers.get("appkey", "")
+
         for attempt in range(self.REST_API_RETRY + 1):
             try:
+                _RestThrottle.throttle(api_key, self.rest_min_interval_sec())
                 return requests.get(url=url, headers=headers, params=params, timeout=self.REST_API_TIMEOUT)
             except requests.exceptions.ConnectionError:
                 if attempt == self.REST_API_RETRY: raise

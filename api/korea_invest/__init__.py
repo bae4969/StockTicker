@@ -69,27 +69,20 @@ class ApiKoreaInvestType:
             def kernel_func(rest_api_token: dict, stock_market_code_list: list) -> None:
                 for stock_market_code in stock_market_code_list:
                     try:
-                        min_micro = 1000000. / self.__rest.MAX_REST_API_COUNT_PER_KEY + self.__rest.REST_API_DELAY_MICRO
-                        start_dt = DateTime.now()
+                        # 호출 간격은 _rest 의 키 단위 공유 리미터가 건다 (지수·환율 폴링과 같은 예산).
                         stock_market = stock_market_code[0]
                         stock_type = stock_market_code[1]
                         stock_code = stock_market_code[2]
                         rest_api_token_header = rest_api_token["TOKEN_HEADER"]
 
                         if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
-                            min_micro *= 1
                             stock_info_dict = self.__rest.kr_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
                             tables.enqueue_update_stock_info(self.__sql, self.__sql_main_db, stock_info_dict)
                         elif stock_market in ["NASDAQ", "NYSE", "AMEX"]:
-                            min_micro *= 2
                             stock_info_dict = self.__rest.ex_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
                             tables.enqueue_update_stock_info(self.__sql, self.__sql_main_db, stock_info_dict)
                         else:
                             continue
-
-                        diff_micro = (DateTime.now() - start_dt).microseconds
-                        if min_micro > diff_micro:
-                            time.sleep((min_micro - diff_micro) / 1000000.)
 
                     except Exception as e:
                         util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")

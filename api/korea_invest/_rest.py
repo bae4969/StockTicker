@@ -358,6 +358,129 @@ class KoreaInvestRestClient:
         except Exception as e:
             raise Exception("[ ex stock info ][ %s ][ %s ]"%(stock_code, e.__str__()))
 
+    def kr_index_tick_list(self, rest_api_token_header: dict, index_code: str) -> list:
+        # 국내업종 시간별지수(분). 최신순 [(DateTime, 지수값, 거래량), ...]
+        try:
+            api_header = rest_api_token_header.copy()
+            api_header["tr_id"] = "FHPUP02110200"
+            api_para = {
+                "FID_COND_MRKT_DIV_CODE" : "U",
+                "FID_INPUT_ISCD" : index_code,
+                "FID_INPUT_HOUR_1" : "60",
+            }
+
+            response = self.__safe_get(
+                url = self.API_BASE_URL + "/uapi/domestic-stock/v1/quotations/inquire-index-timeprice",
+                headers= api_header,
+                params= api_para,
+            )
+
+            rep_json = json.loads(response.text)
+            if int(rep_json["rt_cd"]) != 0:
+                raise Exception(f"Recv Code [ {rep_json.get('msg1', '')} ]")
+
+            today_str = DateTime.now().strftime("%Y%m%d")
+            result_list = []
+            for row in rep_json.get("output", []):
+                hour_str = row.get("bsop_hour", "")
+                # 999999(현재값)·888888(장마감 집계)은 시각이 아닌 특수행이라 버린다.
+                if len(hour_str) != 6 or hour_str in ("999999", "888888"):
+                    continue
+                result_list.append((
+                    DateTime.strptime(today_str + hour_str, "%Y%m%d%H%M%S"),
+                    util.TryParseFloat(row.get("bstp_nmix_prpr")),
+                    util.TryParseFloat(row.get("cntg_vol")),
+                ))
+
+            return result_list
+
+        except Exception as e:
+            raise Exception("[ kr index ][ %s ][ %s ]"%(index_code, e.__str__()))
+
+    def ex_index_candle_list(self, rest_api_token_header: dict, index_code: str) -> list:
+        # 해외지수 분봉. 최신순 [(DateTime(현지시각), 종가, 시가, 고가, 저가, 거래량), ...]
+        try:
+            api_header = rest_api_token_header.copy()
+            api_header["tr_id"] = "FHKST03030200"
+            api_para = {
+                "FID_COND_MRKT_DIV_CODE" : "N",
+                "FID_INPUT_ISCD" : index_code,
+                "FID_HOUR_CLS_CODE" : "0",
+                "FID_PW_DATA_INCU_YN" : "Y",
+            }
+
+            response = self.__safe_get(
+                url = self.API_BASE_URL + "/uapi/overseas-price/v1/quotations/inquire-time-indexchartprice",
+                headers= api_header,
+                params= api_para,
+            )
+
+            rep_json = json.loads(response.text)
+            if int(rep_json["rt_cd"]) != 0:
+                raise Exception(f"Recv Code [ {rep_json.get('msg1', '')} ]")
+
+            if not self.__is_valid_quote(rep_json.get("output1")):
+                raise Exception("Invalid index code (rt_cd=0 but empty quote)")
+
+            result_list = []
+            for row in rep_json.get("output2", []):
+                date_str = row.get("stck_bsop_date", "")
+                hour_str = row.get("stck_cntg_hour", "")
+                if len(date_str) != 8 or len(hour_str) != 6:
+                    continue
+                result_list.append((
+                    DateTime.strptime(date_str + hour_str, "%Y%m%d%H%M%S"),
+                    util.TryParseFloat(row.get("optn_prpr")),
+                    util.TryParseFloat(row.get("optn_oprc")),
+                    util.TryParseFloat(row.get("optn_hgpr")),
+                    util.TryParseFloat(row.get("optn_lwpr")),
+                    util.TryParseFloat(row.get("cntg_vol")),
+                ))
+
+            return result_list
+
+        except Exception as e:
+            raise Exception("[ ex index ][ %s ][ %s ]"%(index_code, e.__str__()))
+
+    def fx_rate(self, rest_api_token_header: dict, fx_code: str) -> float:
+        # 환율 현재값. 시계열(output2)을 주지 않으므로 조회 시점 스냅샷만 얻는다.
+        try:
+            api_header = rest_api_token_header.copy()
+            api_header["tr_id"] = "FHKST03030200"
+            api_para = {
+                "FID_COND_MRKT_DIV_CODE" : "X",
+                "FID_INPUT_ISCD" : fx_code,
+                "FID_HOUR_CLS_CODE" : "0",
+                "FID_PW_DATA_INCU_YN" : "Y",
+            }
+
+            response = self.__safe_get(
+                url = self.API_BASE_URL + "/uapi/overseas-price/v1/quotations/inquire-time-indexchartprice",
+                headers= api_header,
+                params= api_para,
+            )
+
+            rep_json = json.loads(response.text)
+            if int(rep_json["rt_cd"]) != 0:
+                raise Exception(f"Recv Code [ {rep_json.get('msg1', '')} ]")
+
+            rep_output = rep_json.get("output1")
+            if not self.__is_valid_quote(rep_output):
+                raise Exception("Invalid fx code (rt_cd=0 but empty quote)")
+
+            return util.TryParseFloat(rep_output.get("ovrs_nmix_prpr"))
+
+        except Exception as e:
+            raise Exception("[ fx rate ][ %s ][ %s ]"%(fx_code, e.__str__()))
+
+    @staticmethod
+    def __is_valid_quote(output1) -> bool:
+        # 존재하지 않는 종목코드에도 KIS 는 rt_cd=0 을 주고 값만 0 으로 채워 보낸다.
+        # 이름이 비었거나 현재값이 0이면 무효 코드로 판단한다.
+        if not isinstance(output1, dict):
+            return False
+        return bool(output1.get("hts_kor_isnm")) and util.TryParseFloat(output1.get("ovrs_nmix_prpr")) != 0.0
+
     def rest_min_interval_sec(self) -> float:
         # 키당 허용 호출 간격. 기존 주간 싱크가 쓰던 계산식을 그대로 쓴다.
         return 1.0 / self.MAX_REST_API_COUNT_PER_KEY + self.REST_API_DELAY_MICRO / 1000000.0

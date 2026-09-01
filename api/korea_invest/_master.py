@@ -6,6 +6,69 @@ import glob
 import zipfile
 
 
+def get_kr_index_list() -> list:
+    # idxcode.mst — 국내 업종지수 카탈로그. [시장구분 1B][업종코드 4B][업종명]
+    # 업종코드가 곧 조회 코드다 (0001 코스피, 1001 코스닥, 2001 코스피200).
+    # 반환: [(업종코드, 업종명), ...]
+    ssl._create_default_https_context = ssl._create_unverified_context
+    urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/idxcode.mst.zip", "./temp/idxcode.mst.zip")
+
+    index_zip = zipfile.ZipFile('./temp/idxcode.mst.zip')
+    index_zip.extractall("./temp")
+    index_zip.close()
+
+    result_list = []
+    # mst 는 바이트 고정폭이고 한글은 cp949 에서 2바이트다. 문자 단위로 자르면 필드가 밀리므로
+    # 바이너리로 읽어 바이트 단위로 자른 뒤 디코딩한다.
+    with open("./temp/idxcode.mst", mode="rb") as f:
+        for raw_row in f:
+            raw_row = raw_row.rstrip(b"\r\n")
+            index_code = raw_row[1:5].decode("cp949", errors="ignore").strip()
+            index_name = raw_row[5:].decode("cp949", errors="ignore").strip()
+            if not index_code.isdigit() or not index_name:
+                continue
+            result_list.append((index_code, index_name))
+
+    return result_list
+
+
+def get_overseas_index_fx_list() -> tuple:
+    # frgn_code.mst — 해외지수·환율 카탈로그. [구분코드 1B][심볼 10B][영문명][한글명]
+    #   구분코드 P = 해외지수, X = 환율. X 행은 한글명 시작 위치가 다르다.
+    #   X 행은 '영문명' 자리에 한글 국가명이 들어간다.
+    # 반환: ([(심볼, 한글명, 영문명), ...] 지수, [(심볼, 통화쌍명, 국가명), ...] 환율)
+    ssl._create_default_https_context = ssl._create_unverified_context
+    urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/frgn_code.mst.zip", "./temp/frgn_code.mst.zip")
+
+    frgn_zip = zipfile.ZipFile('./temp/frgn_code.mst.zip')
+    frgn_zip.extractall("./temp")
+    frgn_zip.close()
+
+    index_list = []
+    fx_list = []
+    with open("./temp/frgn_code.mst", mode="rb") as f:
+        for raw_row in f:
+            raw_row = raw_row.rstrip(b"\r\n")
+            div_code = raw_row[0:1].decode("cp949", errors="ignore")
+            symbol = raw_row[1:11].decode("cp949", errors="ignore").strip()
+            if not symbol:
+                continue
+
+            if div_code == "X":
+                country = raw_row[11:40].decode("cp949", errors="ignore").strip()
+                pair_name = raw_row[40:80].decode("cp949", errors="ignore").strip()
+                if pair_name:
+                    fx_list.append((symbol, pair_name, country))
+
+            elif div_code == "P":
+                name_en = raw_row[11:50].decode("cp949", errors="ignore").strip()
+                name_kr = raw_row[50:75].decode("cp949", errors="ignore").strip()
+                if name_kr:
+                    index_list.append((symbol, name_kr, name_en))
+
+    return index_list, fx_list
+
+
 def get_kospi_stock_list() -> dict:
     ssl._create_default_https_context = ssl._create_unverified_context
     urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip", "./temp/kospi_code.zip")

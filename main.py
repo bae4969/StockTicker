@@ -9,14 +9,6 @@ from datetime import datetime as DateTime
 from datetime import timedelta as TimeDelta
 
 
-util.Init(
-    config.SQL_HOST,
-    config.SQL_PORT,
-    config.SQL_ID,
-    config.SQL_PW,
-    config.SQL_LOG_DB,
-    config.SQL_CHARSET,
-)
 bh = API_BH(
     config.SQL_HOST,
     config.SQL_PORT,

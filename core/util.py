@@ -1,148 +1,23 @@
-from core import config
-from datetime import datetime as DateTime, timezone as TimeZone, timedelta as TimeDelta
 import inspect
-import asyncio
-import aiomysql
-from threading import Thread, Event
-
-KST = TimeZone(TimeDelta(hours=9))
 
 
-class MySqlLogger:
-    def __init__(self, sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str) -> None:
-        self.__sql_config = {
-            'host': sql_host,
-            'port': sql_port,
-            'user': sql_id,
-            'password': sql_pw,
-            'db': sql_db,
-            'charset': sql_charset,
-            'autocommit': True,
-        }
-        self.__ready_event = Event()
-        self.__loop = asyncio.new_event_loop()
-        self.__async_thread = Thread(name="Log_Async", target=self.__run_async_loop, daemon=True)
-        self.__async_thread.start()
-        self.__ready_event.wait()
-  
-    def __del__(self) -> None:
-        self.__loop.call_soon_threadsafe(self.__sql_query_queue.put_nowait, None)
-
-    def __run_async_loop(self) -> None:
-        asyncio.set_event_loop(self.__loop)
-        self.__loop.run_until_complete(self.__async_main())
-
-    async def __async_main(self) -> None:
-        self.__sql_query_queue = asyncio.Queue()
-        for attempt in range(1, config.SQL_MAX_RETRY + 1):
-            try:
-                self.__sql_pool = await aiomysql.create_pool(**self.__sql_config)
-                break
-            except Exception as ex:
-                if attempt < config.SQL_MAX_RETRY:
-                    wait = min(2 ** attempt, config.SQL_RETRY_BACKOFF_MAX)
-                    print(f"[MySqlLogger] DB 연결 실패 (시도 {attempt}/{config.SQL_MAX_RETRY}): {ex}, {wait}초 후 재시도")
-                    await asyncio.sleep(wait)
-                else:
-                    print(f"[MySqlLogger] DB 연결 최종 실패: {ex}")
-                    self.__ready_event.set()
-                    return
-        self.__ready_event.set()
-        await self.__async_dequeue()
-        self.__sql_pool.close()
-        await self.__sql_pool.wait_closed()
-
-    async def __async_dequeue(self) -> None:
-        last_year = DateTime.min.year
-        while True:
-            t_log = await self.__sql_query_queue.get()
-            if t_log is None:
-                break
-
-            for attempt in range(1, config.SQL_MAX_RETRY + 1):
-                try:
-                    async with self.__sql_pool.acquire() as conn:
-                        async with conn.cursor() as cursor:
-                            this_year = t_log["DATETIME"].year
-                            table_name = f"stock_ticker_log"
-                            if last_year != this_year:
-                                last_year = this_year
-
-                                create_table_query = f"""
-                                CREATE TABLE IF NOT EXISTS {table_name} (
-                                    log_datetime DATETIME DEFAULT CURRENT_TIMESTAMP,
-                                    log_name VARCHAR(255),
-                                    log_type CHAR(1),
-                                    log_message TEXT,
-                                    log_function VARCHAR(255),
-                                    log_file VARCHAR(255),
-                                    log_line INT
-                                ) COLLATE='utf8mb4_general_ci' ENGINE=InnoDB
-                                """
-
-                                create_table_query += f" PARTITION BY RANGE (YEAR(log_datetime)) ("
-                                create_table_query += f"PARTITION p{last_year:04d} VALUES LESS THAN ({last_year + 1}),"
-                                create_table_query += f"PARTITION pmax VALUES LESS THAN MAXVALUE)"
-
-                                await cursor.execute(create_table_query)
-
-                            name = t_log["NAME"]
-                            type = t_log["TYPE"]
-                            msg = t_log["MSG"]
-                            func = t_log["FUNC"]
-                            file = t_log["FILE"]
-                            line = t_log["LINE"]
-
-                            insert_query = f"""
-                            INSERT INTO {table_name} (log_datetime, log_name, log_type, log_message, log_function, log_file, log_line)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
-                            """
-
-                            log_dt = t_log["DATETIME"].strftime("%Y-%m-%d %H:%M:%S")
-                            await cursor.execute(insert_query, (log_dt, name, type, msg, func, file, line))
-
-                            print(f"[{name}] |{type}| {msg} ({func}|{file}:{line})")
-                    break
-                except Exception as ex:
-                    if config.is_retryable_error(ex) and attempt < config.SQL_MAX_RETRY:
-                        await asyncio.sleep(min(2 ** attempt, 10))
-                        continue
-                    print(f"Log query failed: {ex.__str__()}")
-                    break
-
-    def InsertLog(self, name:str, type:str, msg:str, func:str, file:str, line:int) -> None:
-        self.__loop.call_soon_threadsafe(
-            self.__sql_query_queue.put_nowait,
-            {
-                "DATETIME" : DateTime.now(tz=KST),
-                "NAME" : name,
-                "TYPE" : type,
-                "MSG" : msg,
-                "FUNC" : func,
-                "FILE" : file,
-                "LINE" : line,
-            }
-        )
-
-
-logger_obj:MySqlLogger = None
-
-def Init(sql_host:str, sql_port:int, sql_id:str, sql_pw:str, sql_db:str, sql_charset:str) -> None:
-    global logger_obj
-    logger_obj = MySqlLogger(sql_host, sql_port, sql_id, sql_pw, sql_db, sql_charset)
-
+# 로그는 stdout 으로만 내보낸다.
+#
+# 컨테이너의 docker syslog 드라이버가 이 출력을 01.core 의 logsink 로 보내고, logsink 가
+# 서비스별·날짜별 파일로 보관한다 (logs.bdda.duckdns.org). 시각과 서비스명은 logsink 가 붙이므로
+# 여기서 찍지 않는다.
+#
+# 예전에는 로그 전용 DB(stock_ticker_log)에 적재하면서 stdout 출력을 INSERT 성공 뒤에 두었다.
+# 그 구조는 로그 DB 가 아플 때 로그가 통째로 사라져, 정작 장애 상황에서 아무것도 안 남았다.
 def InsertLog(name:str, type:str, msg:str) -> None:
-    filepath = inspect.stack()[1][1]
+    # inspect.stack() 은 전체 스택과 소스 컨텍스트를 만들어 비싸다. 호출 프레임만 직접 본다.
+    frame = inspect.currentframe().f_back
+    filepath = frame.f_code.co_filename
     filename = filepath[filepath.rfind("/") + 1:]
 
-    logger_obj.InsertLog(
-        name=name,
-        type=type,
-        msg=msg,
-        func=inspect.stack()[1][3],
-        file=filename,
-        line=inspect.stack()[1][2],
-    )
+    # flush 하지 않으면 stdout 이 블록 버퍼링(컨테이너에 TTY 없음)이라 한산할 때 로그가 늦게 나간다.
+    print(f"[{name}] |{type}| {msg} ({frame.f_code.co_name}|{filename}:{frame.f_lineno})", flush=True)
+
 
 
 

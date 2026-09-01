@@ -191,9 +191,12 @@ def get_nasdaq_stock_list() -> dict:
     df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
     df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
+    # 하위 폴더(input·output·scripts)는 건너뛴다 — os.remove 가 디렉토리에서 예외를 던지면
+    # 호출부인 __sync_stock_info_table 의 종목 마스터 갱신 전체가 중단된다.
     files = glob.glob('./temp/*')
     for f in files:
-        os.remove(f)
+        if os.path.isfile(f):
+            os.remove(f)
 
     return {
         "STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
@@ -216,9 +219,12 @@ def get_amex_stock_list() -> dict:
     df.columns = ['National code', 'Exchange id', 'Exchange code', 'Exchange name', 'Symbol', 'realtime symbol', 'Korea name', 'English name', 'Security type', 'currency', 'float position', 'data type', 'base price', 'Bid order size', 'Ask order size', 'market start time', 'market end time', 'DR 여부', 'DR 국가코드', '업종분류코드', '지수구성종목 존재 여부', 'Tick size Type', '구분코드','Tick size type 상세']
     df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
+    # 하위 폴더(input·output·scripts)는 건너뛴다 — os.remove 가 디렉토리에서 예외를 던지면
+    # 호출부인 __sync_stock_info_table 의 종목 마스터 갱신 전체가 중단된다.
     files = glob.glob('./temp/*')
     for f in files:
-        os.remove(f)
+        if os.path.isfile(f):
+            os.remove(f)
 
     return {
         "STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),

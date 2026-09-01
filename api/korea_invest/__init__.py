@@ -39,9 +39,12 @@ class ApiKoreaInvestType:
             if not os.path.exists("./temp"):
                 os.makedirs("./temp")
             else:
+                # temp/ 하위 폴더(input·output·scripts)는 건너뛴다.
+                # os.remove 가 디렉토리에서 IsADirectoryError 를 던지면 종목 마스터 갱신 전체가 중단된다.
                 files = glob.glob('./temp/*')
                 for f in files:
-                    os.remove(f)
+                    if os.path.isfile(f):
+                        os.remove(f)
 
             stock_code_list = {
                 "KOSPI" : master.get_kospi_stock_list(),

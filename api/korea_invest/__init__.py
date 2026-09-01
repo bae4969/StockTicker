@@ -380,6 +380,12 @@ class ApiKoreaInvestType:
             util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync partitions for korea invest api [ {ex.__str__()} ] ")
 
     def SyncDailyInfo(self, target_market: str) -> None:
+        # TODO: 실패해도 메인 루프가 재시도하지 않는다.
+        #   __ws_query_type 을 맨 먼저 대입하는데, 뒤의 sync_token_list()/__sync_ws_query_list() 가
+        #   던지면 상태만 새 시장으로 바뀐 채 구독은 옛 시장 그대로 남는다. main.py 의
+        #   `target_market != GetCurrentCollectingType()` 이 거짓이 되어 다음 전환(8시간 뒤)까지 방치된다.
+        #   고칠 때 주의: 대입을 성공 뒤로 옮기기만 하면 실패 시 메인 루프가 2초마다 재시도하며
+        #   토큰 발급을 연타한다. 재시도 간격을 함께 설계해야 한다. (2026-09-01 확인, 상세는 memory/project-pitfalls)
         try:
             self.__ws_query_type = target_market
             self.__rest.sync_token_list()

@@ -32,7 +32,7 @@ class ApiKoreaInvestType:
 
         # 지수·환율은 실시간 WS 가 없어 REST 폴링으로 모은다.
         self.__quote_keep_polling = True
-        self.__quote_partitions_ready = False
+        self.__quote_query_list: list = []
         self.__quote_last_stored_dict: dict = {}
         self.__quote_thread = Thread(name="KoreaInvest_Quote_Polling", target=self.__run_quote_polling)
         self.__quote_thread.daemon = True
@@ -208,12 +208,10 @@ class ApiKoreaInvestType:
         return False
 
     def __poll_quote_once(self) -> None:
-        # 저장 테이블·파티션은 SyncPartitions 가 만든다. 그 전에는 적재해봐야 실패하므로 기다린다.
-        if not self.__quote_partitions_ready:
-            return
-
+        # 대상 목록은 매번 DB 에서 읽지 않는다. WS 구독 목록과 마찬가지로 시장 전환 때
+        # SyncPartitions 가 갈아끼운 것을 쓴다 (그 시점에 저장 테이블도 함께 만들어진다).
         now = DateTime.now()
-        query_list = self.__get_quote_query_list()
+        query_list = self.__quote_query_list
         if not query_list:
             return
 
@@ -305,9 +303,11 @@ class ApiKoreaInvestType:
                     break
                 time.sleep(1)
 
-    def __sync_ws_query_list(self) -> None:
+    def __sync_ws_query_list(self, target_market: str) -> None:
+        # 인스턴스 상태가 아니라 인자를 본다. 그래야 __ws_query_type 대입을
+        # '전부 성공한 뒤'로 미룰 수 있다 (실패 시 재시도가 살아나도록).
         try:
-            if self.__ws_query_type == "KR":
+            if target_market == "KR":
                 select_query = (
                     "SELECT "
                     + "L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
@@ -318,7 +318,7 @@ class ApiKoreaInvestType:
                      + "OR I.stock_market='KOSDAQ' "
                      + "OR I.stock_market='KONEX'"
                 )
-            elif self.__ws_query_type == "EX":
+            elif target_market == "EX":
                 select_query = (
                     "SELECT "
                     + "L.stock_code, I.stock_market, L.stock_api_type, L.stock_api_stock_code "
@@ -330,7 +330,7 @@ class ApiKoreaInvestType:
                      + "OR I.stock_market='AMEX'"
                 )
             else:
-                raise Exception(f"Invalid ws_query_type [ {self.__ws_query_type} ]")
+                raise Exception(f"Invalid ws_query_type [ {target_market} ]")
 
             cursor = self.__sql.execute_sync(select_query)
             sql_query_list = cursor.fetchall()
@@ -369,27 +369,28 @@ class ApiKoreaInvestType:
                         tables.create_stock_orderbook_tables(self.__sql, sql_query[0], this_year)
                         tables.create_stock_orderbook_tables(self.__sql, sql_query[0], this_year + 1)
 
+            # 지수·환율 수집 대상도 WS 구독 목록과 같은 시점(시장 전환)에 교체한다.
+            # 테이블을 만든 뒤에 목록을 갈아끼우므로, 폴링이 저장 테이블 없는 대상을 잡는 일이 없다.
+            quote_query_list = self.__get_quote_query_list()
             this_year = DateTime.now().year
-            for quote_query, query_type, _operator, _api_code, _base_api_code in self.__get_quote_query_list():
+            for quote_query, query_type, _operator, _api_code, _base_api_code in quote_query_list:
                 quote_id = ("f" if query_type == "FX" else "i") + quote_query
                 tables.create_quote_execution_tables(self.__sql, quote_id, this_year)
                 tables.create_quote_execution_tables(self.__sql, quote_id, this_year + 1)
-            self.__quote_partitions_ready = True
+            self.__quote_query_list = quote_query_list
 
         except Exception as ex:
             util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync partitions for korea invest api [ {ex.__str__()} ] ")
 
     def SyncDailyInfo(self, target_market: str) -> None:
-        # TODO: 실패해도 메인 루프가 재시도하지 않는다.
-        #   __ws_query_type 을 맨 먼저 대입하는데, 뒤의 sync_token_list()/__sync_ws_query_list() 가
-        #   던지면 상태만 새 시장으로 바뀐 채 구독은 옛 시장 그대로 남는다. main.py 의
-        #   `target_market != GetCurrentCollectingType()` 이 거짓이 되어 다음 전환(8시간 뒤)까지 방치된다.
-        #   고칠 때 주의: 대입을 성공 뒤로 옮기기만 하면 실패 시 메인 루프가 2초마다 재시도하며
-        #   토큰 발급을 연타한다. 재시도 간격을 함께 설계해야 한다. (2026-09-01 확인, 상세는 memory/project-pitfalls)
+        # __ws_query_type 은 구독 갱신까지 전부 끝난 뒤에 바꾼다.
+        # 먼저 바꾸면, 뒤에서 예외가 나도 메인 루프의 전환 조건이 거짓이 되어
+        # 구독은 옛 시장 그대로인 채 다음 전환(8시간 뒤)까지 방치된다.
+        # 재시도 간격은 호출부(main.py)가 지킨다.
         try:
-            self.__ws_query_type = target_market
             self.__rest.sync_token_list()
-            self.__sync_ws_query_list()
+            self.__sync_ws_query_list(target_market)
+            self.__ws_query_type = target_market
         except Exception as ex:
             util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync daily info for korea invest api [ {ex.__str__()} ] ")
 

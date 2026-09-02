@@ -33,6 +33,9 @@ next_update_info_datetime += TimeDelta(days=days_until_sunday)
 if next_update_info_datetime <= DateTime.now():
     next_update_info_datetime += TimeDelta(days=7)
 
+KI_DAILY_SYNC_RETRY_INTERVAL = TimeDelta(minutes=5)
+last_ki_daily_sync_try = DateTime.min
+
 stop_requested = False
 
 def _on_shutdown_signal(signum, _frame):
@@ -62,9 +65,14 @@ while not stop_requested:
             bh.SyncPartitions()
             bh.SyncDailyInfo()
 
+        # SyncDailyInfo 는 전부 성공했을 때만 시장을 바꾼다. 실패하면 이 조건이 계속 참이라
+        # 재시도되는데, 루프가 2초짜리라 그대로 두면 토큰 발급을 연타하게 된다.
+        # 실패 원인이 대개 발급 한도라 간격을 넉넉히 둔다.
         if target_market != ki.GetCurrentCollectingType():
-            ki.SyncPartitions()
-            ki.SyncDailyInfo(target_market)
+            if DateTime.now() - last_ki_daily_sync_try >= KI_DAILY_SYNC_RETRY_INTERVAL:
+                last_ki_daily_sync_try = DateTime.now()
+                ki.SyncPartitions()
+                ki.SyncDailyInfo(target_market)
 
     except Exception as ex:
         util.InsertLog("Main", "E", f"Main loop error [ {ex.__str__()} ]")

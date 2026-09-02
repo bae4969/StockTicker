@@ -108,9 +108,13 @@ class ApiBithumbType:
             util.InsertLog("ApiBithumb", "E", f"Fail to sync partitions for bithumb api [ {ex.__str__()} ] ")
 
     def SyncDailyInfo(self) -> None:
+        # __ws_query_datetime 은 구독 갱신까지 성공한 뒤에 바꾼다.
+        # 먼저 바꾸면, 뒤에서 예외가 나도 메인 루프의 조건이 거짓이 되어
+        # 구독이 갱신되지 않은 채 하루 동안 방치된다. (KIS 쪽과 같은 결함)
+        # 재시도 간격은 호출부(main.py)가 지킨다.
         try:
-            self.__ws_query_datetime = DateTime.now().replace(hour=0, minute=0, second=0)
             self.__sync_ws_query_list()
+            self.__ws_query_datetime = DateTime.now().replace(hour=0, minute=0, second=0)
         except Exception as ex:
             util.InsertLog("ApiBithumb", "E", f"Fail to sync daily info for bithumb api [ {ex.__str__()} ] ")
 

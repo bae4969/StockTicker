@@ -4,7 +4,7 @@ import inspect
 # 로그는 stdout 으로만 내보낸다.
 #
 # 컨테이너의 docker syslog 드라이버가 이 출력을 01.core 의 logsink 로 보내고, logsink 가
-# 서비스별·날짜별 파일로 보관한다 (logs.bdda.duckdns.org). 시각과 서비스명은 logsink 가 붙이므로
+# 서비스별·날짜별 파일로 보관한다(웹에서도 조회한다). 시각과 서비스명은 logsink 가 붙이므로
 # 여기서 찍지 않는다.
 #
 # 예전에는 로그 전용 DB(stock_ticker_log)에 적재하면서 stdout 출력을 INSERT 성공 뒤에 두었다.

@@ -1,4 +1,5 @@
 .claude/
+.agents/memory/
 __pycache__/
 config/
 temp/

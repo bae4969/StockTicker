@@ -1,140 +1,282 @@
-name: Main Branch CI/CD Pipeline
+name: Topic Branch CI / Main Release / Manual Apply
 
 on:
   push:
     branches:
-      - main # main 브랜치에 코드가 푸시(머지 포함)될 때 실행
+      - main # PR 머지 — 릴리스와 이미지 push 까지만 한다(운영 재시작 없음)
+      # 공개 저장소의 fork PR 코드를 내부 VM 에서 실행하지 않는다. PR 에 쓰는 저장소 내부
+      # 토픽 브랜치만 검사하고, 이 결과를 main ruleset 의 required check 로 묶는다.
+      # `dev` 푸시는 아무것도 트리거하지 않는다.
+      - 'release/**'
+      - 'fix/**'
+      - 'chore/**'
+  # 운영 적용(=컨테이너 재시작)은 자동으로 하지 않는다. 이 서비스는 재시작 한 번이
+  # 2~4분치 체결 데이터 영구 손실이라, 언제 반영할지는 사람이 고른다.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '적용할 버전 (예: v1.0.0). 비우면 VERSION 파일의 값을 쓴다'
+        required: false
+        default: ''
 
 concurrency:
   group: production-deploy-${{ github.ref }}
-  cancel-in-progress: true
+  # 이미지 push 나 TrueNAS app.update 중간에 취소되면 반쪽 배포가 된다.
+  cancel-in-progress: false
 
 env:
-  APP_DIR: /mnt/10.project/23.stock_ticker
-  DEPLOY_BRANCH: main
+  # 레지스트리의 mutable 태그가 바뀌어도 검토한 베이스만 쓴다 (python:3.11, 2026-09-12 확인).
+  BASE_IMAGE_DIGEST: sha256:8ce0c4b7bad2a0939d3fe311e30f1f12b491b0ba335fe1f2daa1b99894588503
+  # 공개 저장소라 주소·계정은 파일에 쓰지 않고 저장소 변수로 받는다
+  # (Settings → Secrets and variables → Actions → Variables). 비어 있으면 첫 단계에서 멈춘다.
+  # 러너(VM) → NAS. 여기로 SSH 하면 authorized_keys 의 `command=` 가 배포 스크립트를
+  # 강제 실행한다 — 무슨 명령을 보내든 그것만 돈다.
+  DEPLOY_SSH_TARGET: ${{ vars.DEPLOY_SSH_TARGET }}
 
 jobs:
-  # 0단계: 기본 검증 (CI)
+  # 0단계: 기본 검증 (CI) — 토픽 브랜치와 main push 에서 돈다
   quality-check:
-    runs-on: ubuntu-latest
+    name: quality-check
+    if: github.event_name == 'push'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
     steps:
+      - name: Check deploy variables
+        run: |
+          if [ -z "$DEPLOY_SSH_TARGET" ]; then
+            echo "::error::저장소 변수 DEPLOY_SSH_TARGET 이 비어 있다 (Settings → Secrets and variables → Actions → Variables)"
+            exit 1
+          fi
+
       - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/checkout@v7
         with:
-          python-version: '3.11'
+          fetch-depth: 0
 
-      - name: Install dependencies for CI
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r docker/requirements.txt
+      # 러너의 파이썬은 3.12 다. 빠른 문법 확인용이고, 실제 3.11 검증은 아래 이미지 안에서 한다.
+      - name: Python 문법 검사
+        run: python3 -m compileall -q main.py api core scripts
 
-      - name: Python syntax check
+      - name: VERSION 형식 검사
         run: |
-          python -m compileall -q main.py api core scripts
+          VERSION=$(tr -d ' \t\n\r' < VERSION)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION 파일이 semver 가 아니다: $VERSION"
+            exit 1
+          fi
+          echo "VERSION=$VERSION"
+
+      - name: Deployment file 검사
+        run: |
+          bash -n deploy/nas/deploy-stockticker-image.sh
+          python3 - <<'PY' | docker compose -f - config -q
+          from pathlib import Path
+          text = Path("deploy/truenas/bae-stock-ticker.yml").read_text()
+          text = text.replace("__VERSION__", "v0.0.0")
+          text = text.replace("__DIGEST__", "sha256:" + "0" * 64)
+          print(text)
+          PY
+
+      # 운영과 같은 Dockerfile·digest 고정 베이스로 실제 빌드까지 확인한다.
+      # 레지스트리에는 push 하지 않고 검사 태그만 지워 레이어 캐시는 다음 빌드에 재사용한다.
+      - name: Build application image
+        run: |
+          set -euo pipefail
+          CI_IMAGE="bae-stock-ticker-ci:$GITHUB_SHA"
+          docker build \
+            --build-arg "BASE_IMAGE=python:3.11@$BASE_IMAGE_DIGEST" \
+            --build-arg "APP_VERSION=ci" \
+            --build-arg "VCS_REF=$GITHUB_SHA" \
+            --file docker/Dockerfile \
+            --tag "$CI_IMAGE" .
+
+      # 이미지 안에서 3.11 로 다시 확인한다. main.py 는 임포트하면 수집 루프가 도니 건드리지 않는다.
+      - name: 이미지 내용 검사
+        run: |
+          set -euo pipefail
+          docker run --rm "bae-stock-ticker-ci:$GITHUB_SHA" sh -c '
+            set -e
+            test "$(id -u):$(id -g)" = "1000:3000"
+            test -f /workspace/main.py
+            test -d /workspace/api && test -d /workspace/core && test -d /workspace/scripts
+            test -w /workspace/temp
+            python3 -m compileall -q /workspace/main.py /workspace/api /workspace/core /workspace/scripts
+            python3 -c "import pandas, numpy, pymysql, aiomysql, aiohttp, requests, websockets, websocket"
+            python3 -c "import core.util" 
+          '
 
       - name: Run tests when tests directory exists
         run: |
+          set -euo pipefail
           if [ -d tests ]; then
-            python -m pip install pytest
-            pytest -q
+            docker run --rm "bae-stock-ticker-ci:$GITHUB_SHA" sh -c '
+              pip install --no-cache-dir --user pytest >/dev/null &&
+              python3 -m pytest -q
+            '
           else
             echo "No tests directory. Skipping tests."
           fi
 
-  # 1단계: 릴리스 생성 (Release)
+      - name: Remove CI image tag
+        if: always()
+        run: docker image rm --force "bae-stock-ticker-ci:$GITHUB_SHA" >/dev/null 2>&1 || true
+
+  # 1단계: 릴리스 생성 (Release) — main 에서만
   create-release:
     needs: quality-check
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
       VERSION: ${{ steps.get_version.outputs.VERSION }}
-      RELEASE_CREATED: ${{ steps.release_decision.outputs.release_created }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      # 날짜 + 커밋 해시 기반 버전 생성
       - name: Extract version
         id: get_version
-        run: |
-          VERSION="v$(date +'%Y.%m.%d')-${GITHUB_SHA::7}"
-          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+        run: echo "VERSION=v$(tr -d ' \t\n\r' < VERSION)" >> "$GITHUB_OUTPUT"
 
-      - name: Check if tag already exists
-        id: tag_check
+      # 같은 버전을 다시 쓰면 이전 릴리스 이력이 사라진다. 삭제 후 재생성하지 않고 실패시킨다.
+      - name: Check version is new
         run: |
           TAG="${{ steps.get_version.outputs.VERSION }}"
-          if git ls-remote --tags origin "refs/tags/$TAG" | grep -q "$TAG"; then
-            echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Tag $TAG already exists. Skip release creation."
-          else
-            echo "exists=false" >> $GITHUB_OUTPUT
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::이미 존재하는 버전이다: $TAG (VERSION 파일을 올릴 것)"
+            exit 1
           fi
 
-      - name: Decide release creation
-        id: release_decision
+      - name: Build release notes from commit history
         run: |
-          if [ "${{ steps.tag_check.outputs.exists }}" = "true" ]; then
-            echo "release_created=false" >> $GITHUB_OUTPUT
-          else
-            echo "release_created=true" >> $GITHUB_OUTPUT
+          set -e
+          CURRENT_TAG="${{ steps.get_version.outputs.VERSION }}"
+          PREV_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)
+          {
+            echo "## Full Commit List"
+            if [ -n "$PREV_TAG" ]; then
+              echo
+              echo "Base: $PREV_TAG -> $CURRENT_TAG"
+              echo
+              git log "$PREV_TAG..HEAD" --pretty=format:'- %s (%h)'
+            else
+              echo
+              echo "Base: initial release"
+              echo
+              git log --pretty=format:'- %s (%h)'
+            fi
+          } > RELEASE_NOTES.md
+          if ! grep -q "^- " RELEASE_NOTES.md; then
+            echo "- No commits found in this release window." >> RELEASE_NOTES.md
           fi
 
-      # 배포용 파일 압축
-      - name: Archive production files
-        if: steps.release_decision.outputs.release_created == 'true'
-        run: |
-          zip -r release-source.zip . -x ".git/*" ".github/*" "__pycache__/*" "*.pyc" ".venv/*" "temp/*"
-
-      - name: Upload release artifact
-        if: steps.release_decision.outputs.release_created == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-source
-          path: release-source.zip
-
-      # GitHub Release 생성
       - name: Create GitHub Release
-        if: steps.release_decision.outputs.release_created == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.VERSION }}
           name: Release ${{ steps.get_version.outputs.VERSION }}
-          files: release-source.zip
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 2단계: 서버 배포 (CD)
-  deploy:
+  # 2단계: 이미지 빌드·push (CD 전반) — 운영은 아직 건드리지 않는다
+  publish-image:
     needs: create-release
-    if: needs.create-release.outputs.RELEASE_CREATED == 'true'
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
     steps:
-      - name: Sync source in VM directory
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Build and push application image
         run: |
-          set -e
+          set -euo pipefail
+          VERSION="${{ needs.create-release.outputs.VERSION }}"
+          REGISTRY="${DEPLOY_SSH_TARGET##*@}:5000"
+          IMAGE="$REGISTRY/bae-stock-ticker:$VERSION"
 
-          if [ ! -d "$APP_DIR/.git" ]; then
-            echo "Repository not found in $APP_DIR"
+          curl -fsS --max-time 10 "http://$REGISTRY/v2/" >/dev/null
+          docker build \
+            --build-arg "BASE_IMAGE=python:3.11@$BASE_IMAGE_DIGEST" \
+            --build-arg "APP_VERSION=$VERSION" \
+            --build-arg "VCS_REF=$GITHUB_SHA" \
+            --file docker/Dockerfile \
+            --tag "$IMAGE" .
+          docker push "$IMAGE"
+          DIGEST_REF=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          IMAGE_DIGEST="${DIGEST_REF##*@}"
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::이미지 digest 를 확인할 수 없다: $DIGEST_REF"
+            exit 1
+          fi
+          {
+            echo "## 이미지 준비 완료 — 운영에는 아직 반영되지 않았다"
+            echo
+            echo "- 버전: \`$VERSION\`"
+            echo "- digest: \`$IMAGE_DIGEST\`"
+            echo
+            echo "반영하려면 Actions → 이 워크플로 → **Run workflow** 로 적용한다."
+            echo "적용 시 컨테이너가 재생성되어 **2~4분 수집 공백**이 생긴다 — 한산한 창을 고를 것."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 3단계: 운영 적용 (수동) — 여기서만 컨테이너가 재시작된다
+  apply:
+    name: apply (운영 재시작)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 20
+    steps:
+      - name: Check deploy variables
+        run: |
+          if [ -z "$DEPLOY_SSH_TARGET" ]; then
+            echo "::error::저장소 변수 DEPLOY_SSH_TARGET 이 비어 있다"
             exit 1
           fi
 
-          # 배포에서 권한 변경은 하지 않고, 권한 문제 시 명확히 실패 처리
-          if [ ! -r "$APP_DIR/.git/objects" ] || [ ! -w "$APP_DIR/.git/objects" ]; then
-            echo "Permission denied for $APP_DIR/.git/objects"
-            echo "Fix repository ownership/permissions manually on runner host, then retry."
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Resolve version and digest
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION="v$(tr -d ' \t\n\r' < VERSION)"
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::버전 형식이 아니다: $VERSION"
             exit 1
           fi
+          REGISTRY="${DEPLOY_SSH_TARGET##*@}:5000"
+          IMAGE_DIGEST=$(curl -fsSI --max-time 10 \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' \
+            -H 'Accept: application/vnd.oci.image.manifest.v1+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.list.v2+json' \
+            -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
+            "http://$REGISTRY/v2/bae-stock-ticker/manifests/$VERSION" \
+            | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}')
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::레지스트리에서 $VERSION 의 digest 를 찾지 못했다 (먼저 main 파이프라인이 이미지를 올려야 한다)"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
-          cd "$APP_DIR"
-          git fetch origin "$DEPLOY_BRANCH"
-          git checkout "$DEPLOY_BRANCH"
-          git reset --hard "origin/$DEPLOY_BRANCH"
+      # 저장소의 YAML 도 매번 보낸다. NAS 의 강제 명령이 이미지·마운트·로그 설정을
+      # allowlist 로 검사한 뒤 bae-stock-ticker 하나에만 적용한다.
+      - name: Apply TrueNAS compose
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/deploy_stockticker -o BatchMode=yes -o ConnectTimeout=10 \
+              "$DEPLOY_SSH_TARGET" \
+              "deploy $VERSION $IMAGE_DIGEST" \
+              < deploy/truenas/bae-stock-ticker.yml
 
       - name: Deployment complete
-        run: echo "Successfully deployed ${{ needs.create-release.outputs.VERSION }} to $APP_DIR"
+        run: |
+          echo "적용 완료: $VERSION ($IMAGE_DIGEST)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "수집 재개는 로그로 확인한다 — 'Initial subscriptions sent'" >> "$GITHUB_STEP_SUMMARY"

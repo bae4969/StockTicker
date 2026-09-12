@@ -6,6 +6,78 @@ import glob
 import zipfile
 
 
+EX_STOCK_CATEGORY_NAMES = {
+    "0": "에너지",
+    "1": "소재",
+    "2": "산업재",
+    "3": "경기소비재",
+    "4": "필수소비재",
+    "5": "헬스케어",
+    "6": "금융",
+    "7": "정보기술",
+    "8": "커뮤니케이션",
+    "9": "유틸리티",
+}
+
+
+def _format_stock_symbol(symbol) -> str:
+    symbol = str(symbol)
+    if symbol[0].isalpha():
+        return symbol[0] + symbol[1:].zfill(6)
+    return symbol.zfill(6)
+
+
+def _master_code(value, width: int) -> str:
+    if pd.isna(value):
+        return ""
+    code = str(value).strip()
+    if code.endswith(".0"):
+        code = code[:-2]
+    return code.zfill(width)
+
+
+def _stock_entries(
+    df,
+    stock_type: str,
+    mask,
+    category_column: str | None = None,
+    category_names: dict | None = None,
+    overseas: bool = False,
+) -> list:
+    """마스터 행을 `(종목코드, 카테고리코드, 카테고리명)`으로 줄인다.
+
+    ETF·ETN은 회사 업종이 없으므로 상품 종류 자체를 카테고리로 쓴다. 국내 주식은
+    지수업종 대분류 4자리와 idxcode.mst 이름을, 미국 주식은 업종분류코드 3자리의
+    첫 자리(10개 대분류)를 쓴다. `000`·`0000`은 분류가 아니라 전체/미지정 값이다.
+    """
+    result = []
+    for _, row in df[mask].iterrows():
+        symbol = (str(row["Symbol"]).upper() if overseas
+                  else _format_stock_symbol(row["단축코드"]))
+        if stock_type in ("ETF", "ETN"):
+            result.append((symbol, stock_type, stock_type))
+            continue
+
+        if not category_column:
+            result.append((symbol, "", ""))
+            continue
+
+        raw_code = _master_code(row[category_column], 3 if overseas else 4)
+        if raw_code in ("", "000", "0000"):
+            result.append((symbol, "", ""))
+            continue
+
+        if overseas:
+            category_code = raw_code[0]
+            category_name = EX_STOCK_CATEGORY_NAMES.get(category_code, "")
+        else:
+            category_code = raw_code
+            category_name = (category_names or {}).get(category_code, "")
+        result.append((symbol, category_code, category_name))
+
+    return result
+
+
 def get_kr_index_list() -> list:
     # idxcode.mst — 국내 업종지수 카탈로그. [시장구분 1B][업종코드 4B][업종명]
     # 업종코드가 곧 조회 코드다 (0001 코스피, 1001 코스닥, 2001 코스피200).
@@ -69,7 +141,7 @@ def get_overseas_index_fx_list() -> tuple:
     return index_list, fx_list
 
 
-def get_kospi_stock_list() -> dict:
+def get_kospi_stock_list(category_names: dict | None = None) -> dict:
     ssl._create_default_https_context = ssl._create_unverified_context
     urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kospi_code.mst.zip", "./temp/kospi_code.zip")
 
@@ -106,20 +178,17 @@ def get_kospi_stock_list() -> dict:
     df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
     df["단축코드"] = df["단축코드"].astype('str')
 
-    def format_etn(symbol):
-        if symbol[0].isalpha():
-            return symbol[0] + symbol[1:].zfill(6)
-        else:
-            return symbol.zfill(6)
-
     return {
-        "STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
-        "ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
-        "ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+        "STOCK": _stock_entries(
+            df, "STOCK", (df["그룹코드"] == "ST") | (df["그룹코드"] == "RT"),
+            "지수업종대분류", category_names,
+        ),
+        "ETF": _stock_entries(df, "ETF", df["그룹코드"] == "EF"),
+        "ETN": _stock_entries(df, "ETN", df["그룹코드"] == "EN"),
     }
 
 
-def get_kosdaq_stock_list() -> dict:
+def get_kosdaq_stock_list(category_names: dict | None = None) -> dict:
     ssl._create_default_https_context = ssl._create_unverified_context
     urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/kosdaq_code.mst.zip", "./temp/kosdaq_code.zip")
 
@@ -156,20 +225,17 @@ def get_kosdaq_stock_list() -> dict:
     df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
     df["단축코드"] = df["단축코드"].astype('str')
 
-    def format_etn(symbol):
-        if symbol[0].isalpha():
-            return symbol[0] + symbol[1:].zfill(6)
-        else:
-            return symbol.zfill(6)
-
     return {
-        "STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
-        "ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
-        "ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+        "STOCK": _stock_entries(
+            df, "STOCK", (df["그룹코드"] == "ST") | (df["그룹코드"] == "RT"),
+            "지수업종 대분류 코드", category_names,
+        ),
+        "ETF": _stock_entries(df, "ETF", df["그룹코드"] == "EF"),
+        "ETN": _stock_entries(df, "ETN", df["그룹코드"] == "EN"),
     }
 
 
-def get_konex_stock_list() -> dict:
+def get_konex_stock_list(category_names: dict | None = None) -> dict:
     ssl._create_default_https_context = ssl._create_unverified_context
     urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/konex_code.mst.zip", "./temp/konex_code.zip")
 
@@ -206,16 +272,13 @@ def get_konex_stock_list() -> dict:
     df = pd.merge(df1, df2, how="outer", left_index=True, right_index=True)
     df["단축코드"] = df["단축코드"].astype('str')
 
-    def format_etn(symbol):
-        if symbol[0].isalpha():
-            return symbol[0] + symbol[1:].zfill(6)
-        else:
-            return symbol.zfill(6)
-
     return {
-        "STOCK" : df[(df["그룹코드"] == "ST")|(df["그룹코드"] == "RT")]["단축코드"].apply(format_etn).tolist(),
-        "ETF" : df[df["그룹코드"] == "EF"]["단축코드"].apply(format_etn).tolist(),
-        "ETN" : df[df["그룹코드"] == "EN"]["단축코드"].apply(format_etn).tolist(),
+        # KONEX 마스터에는 지수업종 분류 필드가 없다.
+        "STOCK": _stock_entries(
+            df, "STOCK", (df["그룹코드"] == "ST") | (df["그룹코드"] == "RT")
+        ),
+        "ETF": _stock_entries(df, "ETF", df["그룹코드"] == "EF"),
+        "ETN": _stock_entries(df, "ETN", df["그룹코드"] == "EN"),
     }
 
 
@@ -234,9 +297,11 @@ def get_nyse_stock_list() -> dict:
     df["Symbol"] = df["Symbol"].astype('str').str.upper()
 
     return {
-        "STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
-        "ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
-        "ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+        "STOCK": _stock_entries(
+            df, "STOCK", df["Security type"] == 2, "업종분류코드", overseas=True
+        ),
+        "ETF": _stock_entries(df, "ETF", df["구분코드"] == "001", overseas=True),
+        "ETN": _stock_entries(df, "ETN", df["구분코드"] == "002", overseas=True),
     }
 
 
@@ -262,9 +327,11 @@ def get_nasdaq_stock_list() -> dict:
             os.remove(f)
 
     return {
-        "STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
-        "ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
-        "ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+        "STOCK": _stock_entries(
+            df, "STOCK", df["Security type"] == 2, "업종분류코드", overseas=True
+        ),
+        "ETF": _stock_entries(df, "ETF", df["구분코드"] == "001", overseas=True),
+        "ETN": _stock_entries(df, "ETN", df["구분코드"] == "002", overseas=True),
     }
 
 
@@ -290,7 +357,9 @@ def get_amex_stock_list() -> dict:
             os.remove(f)
 
     return {
-        "STOCK" : df[df["Security type"] == 2]["Symbol"].tolist(),
-        "ETF" : df[df["구분코드"] == '001']["Symbol"].tolist(),
-        "ETN" : df[df["구분코드"] == '002']["Symbol"].tolist(),
+        "STOCK": _stock_entries(
+            df, "STOCK", df["Security type"] == 2, "업종분류코드", overseas=True
+        ),
+        "ETF": _stock_entries(df, "ETF", df["구분코드"] == "001", overseas=True),
+        "ETN": _stock_entries(df, "ETN", df["구분코드"] == "002", overseas=True),
     }

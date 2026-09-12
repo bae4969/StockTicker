@@ -203,4 +203,5 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
 - [runtime-topology](.agents/memory/runtime-topology.md) — **이 디렉토리가 곧 라이브**: 컨테이너 `bae-stock-ticker` 의 bind mount·재시작 시 1~2분 수집 공백(실측)·logsink 로그 조회·midclt 로 앱 설정 바꾸는 법·배포가 재시작하지 않는다는 사실·한투 테스트 키 보관 위치(`KI_TEST_API_KEY`, 수집 미사용)
 - [project-intent](.agents/memory/project-intent.md) — StockTicker 프로젝트 의도·디렉토리·외부 의존성·자주 쓰는 명령·실행/검증/배포 방법
 - [kis-quote-api](.agents/memory/kis-quote-api.md) — 한투 지수·환율 API: TR ID·종목코드 체계·마스터 파일 구조 + 함정(해외지수 실시간 WS 없음, 다우 미제공, rt_cd=0인데 무효, mst 바이트 고정폭, REST 20건/초 공유 리미터)
+- [stock-categories](.agents/memory/stock-categories.md) — **DB·블로그·티커 적용 완료**. `stock_info` 백필·테스트 키 격리 검증·재구독 결과와 마스터 분류 규칙
 - [project-pitfalls](.agents/memory/project-pitfalls.md) — 운영 함정: 결함 2건의 원인·수정 내역(주간 싱크 실패·SyncDailyInfo 재시도 누락, 둘 다 2026-09-02 반영) + 메인 루프 예외 삼킴·WS 재연결 backoff·temp/ 충돌·마이그레이션 dry-run

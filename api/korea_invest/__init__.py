@@ -47,7 +47,7 @@ class ApiKoreaInvestType:
     ##########################################################################
 
 
-    def __sync_stock_info_table(self) -> None:
+    def __sync_stock_info_table(self, kr_index_list: list | None = None) -> None:
         try:
             if not os.path.exists("./temp"):
                 os.makedirs("./temp")
@@ -59,10 +59,14 @@ class ApiKoreaInvestType:
                     if os.path.isfile(f):
                         os.remove(f)
 
+            if not kr_index_list:
+                kr_index_list = master.get_kr_index_list()
+            kr_category_names = dict(kr_index_list)
+
             stock_code_list = {
-                "KOSPI" : master.get_kospi_stock_list(),
-                "KOSDAQ" : master.get_kosdaq_stock_list(),
-                "KONEX" : master.get_konex_stock_list(),
+                "KOSPI" : master.get_kospi_stock_list(kr_category_names),
+                "KOSDAQ" : master.get_kosdaq_stock_list(kr_category_names),
+                "KONEX" : master.get_konex_stock_list(kr_category_names),
                 "NASDAQ" : master.get_nasdaq_stock_list(),
                 "NYSE" : master.get_nyse_stock_list(),
                 "AMEX" : master.get_amex_stock_list(),
@@ -73,8 +77,10 @@ class ApiKoreaInvestType:
             token_idx = 0
             for stock_market, stock_code_infos in stock_code_list.items():
                 for stock_type, stock_code_list in stock_code_infos.items():
-                    for stock_code in stock_code_list:
-                        temp_market_code_list[token_idx].append([stock_market, stock_type, stock_code])
+                    for stock_code, category_code, category_name in stock_code_list:
+                        temp_market_code_list[token_idx].append([
+                            stock_market, stock_type, stock_code, category_code, category_name
+                        ])
                         token_idx += 1
                         if token_idx >= len(rest_api_token_list):
                             token_idx = 0
@@ -86,16 +92,20 @@ class ApiKoreaInvestType:
                         stock_market = stock_market_code[0]
                         stock_type = stock_market_code[1]
                         stock_code = stock_market_code[2]
+                        category_code = stock_market_code[3]
+                        category_name = stock_market_code[4]
                         rest_api_token_header = rest_api_token["TOKEN_HEADER"]
 
                         if stock_market in ["KOSPI", "KOSDAQ", "KONEX"]:
                             stock_info_dict = self.__rest.kr_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
-                            tables.enqueue_update_stock_info(self.__sql, self.__sql_main_db, stock_info_dict)
                         elif stock_market in ["NASDAQ", "NYSE", "AMEX"]:
                             stock_info_dict = self.__rest.ex_stock_info_dict(rest_api_token_header, stock_code, stock_type, stock_market)
-                            tables.enqueue_update_stock_info(self.__sql, self.__sql_main_db, stock_info_dict)
                         else:
                             continue
+
+                        stock_info_dict["stock_category_code"] = category_code
+                        stock_info_dict["stock_category_name"] = category_name
+                        tables.enqueue_update_stock_info(self.__sql, self.__sql_main_db, stock_info_dict)
 
                     except Exception as e:
                         util.InsertLog("ApiKoreaInvest", "E", f"Fail to update stock info [ {stock_market} | {stock_code} | {e.__str__()}]")
@@ -121,8 +131,9 @@ class ApiKoreaInvestType:
         except Exception as e:
             util.InsertLog("ApiKoreaInvest", "E", "Fail to update stock info : " + e.__str__())
 
-    def __sync_quote_info_table(self) -> None:
+    def __sync_quote_info_table(self) -> list:
         # 지수·환율 카탈로그 갱신. 마스터 파일 2개만 받으면 되고 REST 는 한 건도 쓰지 않는다.
+        kr_index_list = []
         try:
             if not os.path.exists("./temp"):
                 os.makedirs("./temp")
@@ -165,6 +176,7 @@ class ApiKoreaInvestType:
 
         except Exception as e:
             util.InsertLog("ApiKoreaInvest", "E", "Fail to update quote info : " + e.__str__())
+        return kr_index_list
 
     def __get_quote_query_list(self) -> list:
         select_query = (
@@ -399,7 +411,7 @@ class ApiKoreaInvestType:
             self.__rest.sync_token_list()
             # 카탈로그 갱신을 먼저 한다. 파일 2개만 받으면 끝나므로, 수 분 걸리는
             # 종목 마스터 갱신 뒤에 두면 그만큼 늦어지기만 한다.
-            self.__sync_quote_info_table()
-            self.__sync_stock_info_table()
+            kr_index_list = self.__sync_quote_info_table()
+            self.__sync_stock_info_table(kr_index_list)
         except Exception as ex:
             util.InsertLog("ApiKoreaInvest", "E", f"Fail to sync weekly info for korea invest api [ {ex.__str__()} ] ")

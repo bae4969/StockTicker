@@ -10,6 +10,8 @@ def create_stock_info_table(sql_client) -> None:
             + "stock_name_en VARCHAR(256) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
             + "stock_market VARCHAR(32) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
             + "stock_type VARCHAR(32) NOT NULL COLLATE 'utf8mb4_general_ci',"
+            + "stock_category_code VARCHAR(16) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
+            + "stock_category_name VARCHAR(64) NOT NULL DEFAULT '' COLLATE 'utf8mb4_general_ci',"
             + "stock_count BIGINT(20) UNSIGNED NOT NULL DEFAULT '0',"
             + "stock_price DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
             + "stock_capitalization DOUBLE UNSIGNED NOT NULL DEFAULT '0',"
@@ -312,10 +314,12 @@ def create_stock_orderbook_tables(sql_client, stock_code: str, year: int):
 def enqueue_update_stock_info(sql_client, sql_main_db: str, stock_info_dict: dict) -> None:
     sql_client.enqueue(
         f"INSERT INTO {sql_main_db}.stock_info ("
-        "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, stock_count, stock_price, stock_capitalization"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s"
+        "stock_code, stock_name_kr, stock_name_en, stock_market, stock_type, "
+        "stock_category_code, stock_category_name, stock_count, stock_price, stock_capitalization"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s"
         ") ON DUPLICATE KEY UPDATE "
         "stock_name_kr=%s, stock_name_en=%s, stock_market=%s, stock_type=%s, "
+        "stock_category_code=%s, stock_category_name=%s, "
         "stock_count=%s, stock_price=%s, stock_capitalization=%s",
         (
             stock_info_dict['stock_code'],
@@ -323,6 +327,8 @@ def enqueue_update_stock_info(sql_client, sql_main_db: str, stock_info_dict: dic
             stock_info_dict['stock_name_en'],
             stock_info_dict['stock_market'],
             stock_info_dict['stock_type'],
+            stock_info_dict['stock_category_code'],
+            stock_info_dict['stock_category_name'],
             stock_info_dict['stock_count'],
             stock_info_dict['stock_price'],
             stock_info_dict['stock_cap'],
@@ -330,6 +336,8 @@ def enqueue_update_stock_info(sql_client, sql_main_db: str, stock_info_dict: dic
             stock_info_dict['stock_name_en'],
             stock_info_dict['stock_market'],
             stock_info_dict['stock_type'],
+            stock_info_dict['stock_category_code'],
+            stock_info_dict['stock_category_name'],
             stock_info_dict['stock_count'],
             stock_info_dict['stock_price'],
             stock_info_dict['stock_cap'],

@@ -120,21 +120,18 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
 
 #### 핵심 사실 — 무엇이 수집을 끊는가
 
-⚠️ **2026-09-12 이미지 배포로 전환 중이다.** 아래는 **컷오버 전**의 사실이라 지금은 그대로
-유효하다. 컷오버 뒤에는 이 디렉토리가 라이브가 아니게 되고(코드는 이미지 안), 반영은
-`apply` 워크플로를 사람이 눌러야 일어난다 → [deploy-cicd](.agents/memory/deploy-cicd.md).
-
-이 디렉토리는 실행 중인 컨테이너에 bind mount 되어 있다. 그래서:
+**2026-09-12 컷오버로 운영 코드는 이미지 안에 있다.** 이 디렉토리는 더 이상 라이브가 아니고,
+운영 컨테이너는 `stockticker_data/config` 와 `share_data` 만 마운트한다
+→ [deploy-cicd](.agents/memory/deploy-cicd.md).
 
 | 행위 | 수집 영향 |
 |---|---|
-| `.py` 파일 편집·추가 | **없음** — 실행 중인 프로세스는 이미 로딩된 코드로 계속 돈다 |
-| `.claude/`·문서 편집 | **없음** |
-| `config/settings.json` 편집 | 없음(다음 재시작부터 반영). 단 깨진 JSON을 두면 다음 재시작이 실패한다 |
-| **컨테이너 재시작·stop·이미지 재빌드** | **끊긴다 — 전 종목 재구독까지 3~4분** |
+| 이 디렉토리의 `.py`·문서 편집 | **없음** — 운영에 붙어 있지 않다. 반영은 `apply` 로만 된다 |
+| 이 폴더의 `config/settings.json` 편집 | **운영에 반영되지 않는다** — 운영 설정은 `/mnt/nvme/90.service/stockticker_data/config/` |
+| **`apply` 실행·컨테이너 재시작·stop·앱 재배포** | **끊긴다 — 전 종목 재구독까지 3~4분** |
 | `scripts/*.py` 실행 (DDL·마이그레이션) | 테이블 락으로 적재가 밀릴 수 있다 |
 
-즉 **편집은 안전하고, 반영(재시작)이 위험하다.** 이 비대칭이 아래 규칙의 근거다.
+즉 **편집은 안전하고, 반영(`apply`=재시작)이 위험하다.** 이 비대칭이 아래 규칙의 근거다.
 
 #### 규칙
 
@@ -166,13 +163,14 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
    전에, 한투 테스트 키(`config/settings.json` 의 `KI_TEST_API_KEY` — 실전 키지만 잔고 없는 테스트 전용
    계좌이고 데몬은 읽지 않는다)로 먼저 돌려 본다. 재시작 뒤의 확인은 4번대로 로그로 한다.
    다만 이 디렉토리에서 그대로 돌리면 라이브와 부딪히므로:
-   - **라이브의 설정·토큰 캐시·DB 를 공유하지 않는다.** 코드는 `config/settings.json` 과
-     `config/last_token_info.json` 을 코드 위치 기준으로 찾아서, 여기서 돌리면 둘 다 라이브와 같이 쓴다
-     (토큰 캐시는 프로세스 간 잠금이 없다). `ApiKoreaInvestType` 은 생성만 해도 테이블 생성·WS 연결·지수
-     폴링을 시작하므로 DB 설정이 같으면 테스트 데이터가 라이브 DB 에 섞인다. `main.py` 는 빗썸 수집도 띄운다.
+   - **라이브의 설정·DB 를 공유하지 않는다.** 코드는 `config/settings.json` 과
+     `config/last_token_info.json` 을 코드 위치 기준으로 찾는다. 컷오버 뒤로 **운영은 이 폴더가 아니라
+     데이터 디렉토리의 것을 쓰므로 토큰 캐시 충돌은 사라졌지만**, 여기 설정의 **키와 DB 가 운영과 같다** —
+     `ApiKoreaInvestType` 은 생성만 해도 테이블 생성·WS 연결·지수 폴링을 시작하므로 테스트 데이터가
+     라이브 DB 에 섞인다. `main.py` 는 빗썸 수집도 띄운다.
    - **인증 발급 요청은 최소로.** `_AuthThrottle`(1.1초 간격)은 프로세스 안에서만 조율되어 라이브의
      발급과 간격이 맞춰지지 않는다. 같은 IP 라 5번의 IP ban 경로와 겹친다.
-   - **실행 위치:** 호스트에는 `pymysql`·`aiomysql`·`pandas` 가 없다. `stockticker:latest` 이미지로
+   - **실행 위치:** 호스트에는 `pymysql`·`aiomysql`·`pandas` 가 없다. 레지스트리의 `bae-stock-ticker:vX.Y.Z` 이미지로
      별도 컨테이너를 띄우는 쪽이 현실적이다.
    - **절차는 아직 정해지지 않았다.** 정해지기 전에는 무엇을 어떻게 돌릴지(범위·테스트 DB·컨테이너 구성)를
      사용자와 먼저 맞춘 뒤 실행한다.
@@ -229,11 +227,13 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
    토큰도 없어 **PR 생성·머지는 사람 몫**이다 — compare 링크를 건네고 멈춘다.
 4. **`apply` 는 에이전트가 돌리지 않는다.** 시점은 사용자가 정한다. 국내장·미국장이 모두
    한산한 창(주말 또는 06:00~08:00 KST)을 권하고, 빗썸은 24시간이라 완전 무손실 창은 없다고 말한다.
-5. 적용 뒤 확인은 로그로 한다 — `Initial subscriptions sent`. "Up" 은 "수집 중"이 아니다.
+5. 적용 뒤 확인은 로그의 **`SUBSCRIBE SUCCESS` 건수**로 한다(전 종목이면 288건 안팎).
+   `Initial subscriptions sent` 는 WS 가 열릴 때 `count=0` 으로 찍히는 개시 신호라 증거가 아니다.
+   "Up" 은 "수집 중"이 아니다.
 
 ## 메모리 인덱스
 
-- [runtime-topology](.agents/memory/runtime-topology.md) — **이 디렉토리가 곧 라이브**: 컨테이너 `bae-stock-ticker` 의 bind mount·재시작 시 1~2분 수집 공백(실측)·logsink 로그 조회·midclt 로 앱 설정 바꾸는 법·배포가 재시작하지 않는다는 사실·한투 테스트 키 보관 위치(`KI_TEST_API_KEY`, 수집 미사용)
+- [runtime-topology](.agents/memory/runtime-topology.md) — **컷오버 후 구성**: 코드는 이미지 안이고 이 폴더는 작업본이다(2026-09-12)·컨테이너 `bae-stock-ticker` 의 마운트·재시작 시 1~2분 수집 공백(실측)·logsink 로그 조회·midclt 로 앱 설정 바꾸는 법·배포가 재시작하지 않는다는 사실·한투 테스트 키 보관 위치(`KI_TEST_API_KEY`, 수집 미사용)
 - [deploy-cicd](.agents/memory/deploy-cicd.md) — **머지=배포가 아니다**: 러너·레지스트리·제한 SSH 키 구성, `apply` 만 재시작한다는 것, 컷오버 때 토큰 캐시를 함께 옮겨야 하는 이유
 - [project-intent](.agents/memory/project-intent.md) — StockTicker 프로젝트 의도·디렉토리·외부 의존성·자주 쓰는 명령·실행/검증/배포 방법
 - [kis-quote-api](.agents/memory/kis-quote-api.md) — 한투 지수·환율 API: TR ID·종목코드 체계·마스터 파일 구조 + 함정(해외지수 실시간 WS 없음, 다우 미제공, rt_cd=0인데 무효, mst 바이트 고정폭, REST 20건/초 공유 리미터)

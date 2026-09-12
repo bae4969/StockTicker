@@ -278,17 +278,26 @@ echo "기동 확인: image=$image (${START_GRACE}s 동안 재시작 없음)"
 
 # 3) 재구독까지 확인한다. "Up" 은 "수집 중"이 아니다 — 다만 여기서 실패시키면
 #    롤백이 재시작을 한 번 더 부르므로 경고만 남긴다.
+# ⚠️ `docker logs | grep -q` 로 쓰지 말 것. `grep -q` 가 먼저 끝나 `docker logs` 가 SIGPIPE(141)
+#    로 죽고, `set -o pipefail` 때문에 **매치해도 파이프라인이 실패로 잡힌다**(2026-09-12 실측).
+#    그래서 로그를 변수로 받아 셸 패턴으로 본다.
+# ⚠️ `Initial subscriptions sent` 는 증거가 아니다 — WS 가 열리는 순간 `count=0` 으로 찍힌다
+#    (2026-09-12 컷오버에서 10건 전부 count=0). 실제로 붙은 것은 `SUBSCRIBE SUCCESS` 다.
+#    건수가 더 늘지 않으면 재구독이 끝난 것으로 본다(2026-09-02·09-12 모두 288건).
 sub_deadline=$((SECONDS + SUBSCRIBE_TIMEOUT))
+prev_count=-1
 while (( SECONDS < sub_deadline )); do
-    if docker logs "$CONTAINER_NAME" 2>&1 | grep -q "Initial subscriptions sent"; then
-        docker logs "$CONTAINER_NAME" 2>&1 | grep "Initial subscriptions sent" | tail -5
-        echo "수집 재개 확인"
+    recent_logs=$(docker logs --tail 4000 "$CONTAINER_NAME" 2>&1 || true)
+    sub_count=$(printf '%s\n' "$recent_logs" | grep -c "SUBSCRIBE SUCCESS" || true)
+    if (( sub_count > 0 && sub_count == prev_count )); then
+        echo "수집 재개 확인 — 구독 성공 ${sub_count}건"
         exit 0
     fi
-    sleep 10
+    prev_count=$sub_count
+    sleep 15
 done
 
-echo "경고: ${SUBSCRIBE_TIMEOUT}s 안에 'Initial subscriptions sent' 가 없다 — 컨테이너는 떠 있다." >&2
+echo "경고: ${SUBSCRIBE_TIMEOUT}s 안에 재구독이 끝나지 않았다 (구독 성공 ${prev_count}건) — 컨테이너는 떠 있다." >&2
 echo "      로그를 확인할 것. 되돌리려면 이전 버전 태그로 다시 배포한다(재시작 1회 추가)." >&2
 docker logs --tail 40 "$CONTAINER_NAME" >&2 2>&1 || true
 exit 0

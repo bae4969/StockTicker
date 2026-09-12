@@ -279,4 +279,4 @@ jobs:
       - name: Deployment complete
         run: |
           echo "적용 완료: $VERSION ($IMAGE_DIGEST)" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "수집 재개는 로그로 확인한다 — 'Initial subscriptions sent'" >> "$GITHUB_STEP_SUMMARY"
+          echo "수집 재개 판정은 로그의 'SUBSCRIBE SUCCESS' 건수로 한다 (전 종목이면 288건 안팎)" >> "$GITHUB_STEP_SUMMARY"

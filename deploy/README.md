@@ -24,7 +24,8 @@ Runner 와 Actions artifact 저장소는 쓰지 않는다.
 3. (수동 트리거) `truenas/bae-stock-ticker.yml` 을 제한 SSH 연결의 stdin 으로 보낸다.
 4. NAS 의 강제 명령 스크립트가 이미지·마운트·네트워크·로그 설정을 allowlist 로 검사한다.
 5. 버전과 digest 로 고정한 YAML 을 TrueNAS `bae-stock-ticker` 앱에 적용하고,
-   새 컨테이너가 뜬 뒤 죽지 않는지( `DEPLOY_START_GRACE` 초)와 재구독 로그를 확인한다.
+   새 컨테이너가 뜬 뒤 죽지 않는지(`DEPLOY_START_GRACE` 초)와 `SUBSCRIBE SUCCESS` 건수가
+   더 늘지 않을 때까지를 확인한다(전 종목이면 288건 안팎).
 
 ## 영속 데이터
 

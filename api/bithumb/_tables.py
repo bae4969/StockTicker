@@ -1,4 +1,5 @@
 from datetime import datetime as DateTime
+from core import config
 
 
 def create_coin_info_table(sql_client) -> None:
@@ -44,11 +45,11 @@ def create_last_ws_query_table(sql_client) -> None:
 
 def create_coin_execution_tables(sql_client, coin_code: str, year: int) -> None:
     coin_id = "c" + coin_code.replace("/", "_")
-    tick_table_name = f"tick.{coin_id}"
-    candle_table_name = f"candle.{coin_id}"
+    tick_table_name = f"{config.SQL_TICK_DB}.{coin_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{coin_id}"
 
-    create_tick_db_query = "CREATE DATABASE IF NOT EXISTS tick CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
-    create_candle_db_query = "CREATE DATABASE IF NOT EXISTS candle CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_tick_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_TICK_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_candle_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_CANDLE_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
 
     create_tick_table_query = (
         f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
@@ -160,8 +161,8 @@ def enqueue_update_coin_execution(
     bid_volume: float,
 ) -> None:
     coin_id = "c" + coin_code.replace("/", "_")
-    raw_table_name = f"tick.{coin_id}"
-    candle_table_name = f"candle.{coin_id}"
+    raw_table_name = f"{config.SQL_TICK_DB}.{coin_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{coin_id}"
 
     datetime_00_min = dt
     datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)

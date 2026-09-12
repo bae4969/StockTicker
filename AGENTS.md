@@ -159,21 +159,22 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
    등은 그 테이블의 INSERT 를 막는다. `scripts/*` 는 반드시 `--dry-run` 을 먼저 돌리고,
    실제 실행은 사용자 승인 후 한산한 시간에.
 
-7. **배포 전에 테스트 키로 먼저 검증한다.** (사용자 지시 2026-09-11) 코드 변경을 재시작으로 반영하기
-   전에, 한투 테스트 키(`config/settings.json` 의 `KI_TEST_API_KEY` — 실전 키지만 잔고 없는 테스트 전용
-   계좌이고 데몬은 읽지 않는다)로 먼저 돌려 본다. 재시작 뒤의 확인은 4번대로 로그로 한다.
-   다만 이 디렉토리에서 그대로 돌리면 라이브와 부딪히므로:
-   - **라이브의 설정·DB 를 공유하지 않는다.** 코드는 `config/settings.json` 과
-     `config/last_token_info.json` 을 코드 위치 기준으로 찾는다. 컷오버 뒤로 **운영은 이 폴더가 아니라
-     데이터 디렉토리의 것을 쓰므로 토큰 캐시 충돌은 사라졌지만**, 여기 설정의 **키와 DB 가 운영과 같다** —
-     `ApiKoreaInvestType` 은 생성만 해도 테이블 생성·WS 연결·지수 폴링을 시작하므로 테스트 데이터가
-     라이브 DB 에 섞인다. `main.py` 는 빗썸 수집도 띄운다.
-   - **인증 발급 요청은 최소로.** `_AuthThrottle`(1.1초 간격)은 프로세스 안에서만 조율되어 라이브의
-     발급과 간격이 맞춰지지 않는다. 같은 IP 라 5번의 IP ban 경로와 겹친다.
-   - **실행 위치:** 호스트에는 `pymysql`·`aiomysql`·`pandas` 가 없다. 레지스트리의 `bae-stock-ticker:vX.Y.Z` 이미지로
-     별도 컨테이너를 띄우는 쪽이 현실적이다.
-   - **절차는 아직 정해지지 않았다.** 정해지기 전에는 무엇을 어떻게 돌릴지(범위·테스트 DB·컨테이너 구성)를
-     사용자와 먼저 맞춘 뒤 실행한다.
+7. **운영 반영 전에 `bae-stock-ticker-test` 로 검증한다.** (사용자 지시 2026-09-11, 구성 완료
+   2026-09-12) 테스트 앱은 이 작업본을 `/workspace` 로 마운트하고, `config/settings.json` 의 테스트 키
+   1개와 앱 내부의 소형 MariaDB(`bae-stock-ticker-test-db`, 0.5 CPU/512MiB)만 쓴다. DB 포트와
+   `db_bridge` 연결 없이 앱 전용 네트워크의 `BithumbTest`·`KoreaInvestTest`·`tickTest`·`candleTest` 로
+   격리됐다. 주간 전체 종목 싱크도 `ENABLE_WEEKLY_SYNC=false` 로 꺼져 있다.
+   - **평소에는 `STOPPED` 로 둔다.** 코드 변경을 모아 한 번 시작해 검증하고 다시 멈춘다. 시작할 때마다
+     한투 APPROVAL_KEY 를 새로 발급하며 운영과 출발 IP 가 같으므로, 반복 재시작은 5번의 IP ban 경로와 겹친다.
+   - 시작/중지: `sudo midclt call -j app.start bae-stock-ticker-test` / `sudo midclt call -j app.stop bae-stock-ticker-test`.
+     기동 전에는 사용자와 시점을 맞춘다.
+   - 로그 확인: syslog 드라이버라 `docker logs` 가 아니라 logsink 의
+     `bae-stock-ticker-test/<날짜>.log` 와 `bae-stock-ticker-test-db/<날짜>.log` 를 본다.
+     시드 구독은 BTC·005930·AAPL, 지수는 KOSPI 뿐이며 운영 전체 구독을 복제하지 않는다.
+   - compose 원본은 `deploy/truenas/bae-stock-ticker-test.yml`, DB 데이터·비밀은 저장소 밖
+     `/mnt/nvme/90.service/stockticker_test_data/` 에 있다. DB 포트를 호스트에 열지 않는다.
+   - 호스트에는 프로젝트 Python 패키지가 없다. 문법 검사는 호스트에서 되지만 실제 import·동작 검사는
+     테스트 앱 또는 레지스트리의 `bae-stock-ticker:vX.Y.Z` 이미지 안에서 한다.
 
 #### "작업 끝났다"를 함부로 말하지 않는다 (사용자 지시 2026-09-02)
 

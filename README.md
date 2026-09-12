@@ -8,7 +8,7 @@
 - **국내/미국 주식 데이터 수집**: 한국투자증권 Open API를 사용하여 KOSPI, KOSDAQ, KONEX를 비롯한 국내 주식과 NYSE, NASDAQ, AMEX 등 미국 주식의 종목 정보를 갱신하고 실시간 체결 및 호가를 수집합니다.
 - **주기적 데이터 갱신 (Sync)**:
   - 매일: 일일 시세 및 변동 정보 갱신
-  - 매주 일요일/월요일 새벽: 상장 종목 리스트 갱신 등의 대규모 메타 정보 싱크 처리
+  - 매주 일요일 08:00: 상장 종목 리스트 갱신 등의 대규모 메타 정보 싱크 처리
 - **안정적인 DB 저장**: 별도의 Thread와 Queue를 구조화하여 병목 현상 없이 비동기로 SQL 쿼리를 실행 (Data Dequeue). 연 단위로 파티셔닝(Partitioning)된 테이블을 동적으로 생성하여 대용량 데이터를 최적화하여 보관합니다.
 - **지수·환율 수집**: 국내지수(코스피·코스닥·코스피200), 해외지수(S&P500·나스닥종합), 환율(원/달러·엔·유로·위안)을 REST 폴링으로 수집합니다. 수집 대상은 `quote_last_rest_query` 테이블이 결정하므로 코드 수정 없이 바꿀 수 있습니다.
 - **중앙 로그 수집**: 로그는 stdout 으로 내보내고 컨테이너 syslog 드라이버가 `01.core` 의 logsink 로 보냅니다 (웹에서 조회, 90일 보관).
@@ -55,7 +55,7 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
 
 ## ⚙️ 실행 및 설정 방법
 
-1. `config/settings.json` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오.
+1. `config/settings.json` 내부의 **SQL_HOST, SQL_ID, SQL_PW, KI_API_KEY_LIST**를 본인의 환경과 계정에 맞게 수정하십시오. 시계열 DB는 `SQL_TICK_DB`·`SQL_CANDLE_DB`, 주간 동기화는 `ENABLE_WEEKLY_SYNC`로 지정합니다.
 2. MariaDB(MySQL) 서버가 켜져 있어야 하며, Python 패키지를 설치해야 합니다.
     ```bash
     pip install -r docker/requirements.txt
@@ -64,10 +64,10 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
     ```bash
     python main.py
     ```
-4. Docker로 실행하는 경우:
+4. Docker로 직접 실행하는 경우 설정 디렉터리를 마운트합니다.
     ```bash
-    docker build -f docker/Dockerfile .
-    docker run --env-file docker/env.txt stock-ticker
+    docker build -f docker/Dockerfile -t bae-stock-ticker:dev .
+    docker run --rm -v "$PWD/config:/workspace/config" bae-stock-ticker:dev
     ```
 5. DB 마이그레이션이 필요한 경우:
     ```bash
@@ -83,6 +83,17 @@ Data를 MariaDB를 통해 관리합니다. 각 API 연결 파일에서 데이터
     ```bash
     python scripts/repartition_yearweek_to_year.py [--dry-run] [--only-tick|--only-candle]
     ```
+
+## 배포와 테스트 환경
+
+- `main` 머지는 릴리스와 digest 고정 이미지만 레지스트리에 올립니다. 운영 `bae-stock-ticker` 반영은
+  GitHub Actions의 수동 `apply`에서만 하며, 이때 2~4분 수집 공백이 생깁니다.
+- `bae-stock-ticker-test`는 현재 작업본과 테스트 키 1개를 사용하고, 함께 뜨는 소형 MariaDB
+  `bae-stock-ticker-test-db`에만 적재합니다. DB는 앱 전용 네트워크에 있고 포트를 공개하지 않습니다.
+  평소에는 앱 전체를 중지하고, 변경을 모아 한 번 기동해 검증한 뒤 다시 중지합니다.
+- 테스트 앱 시작/중지는 `sudo midclt call -j app.start bae-stock-ticker-test`와
+  `sudo midclt call -j app.stop bae-stock-ticker-test`입니다. 로그는 중앙 logsink의
+  `bae-stock-ticker-test`·`bae-stock-ticker-test-db` 서비스에서 확인합니다.
 
 ## 🧭 개발 규칙 요약
 

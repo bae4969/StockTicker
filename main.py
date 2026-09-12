@@ -57,7 +57,7 @@ while not stop_requested:
         else:
             target_market = "EX"
 
-        if next_update_info_datetime < DateTime.now():
+        if config.ENABLE_WEEKLY_SYNC and next_update_info_datetime < DateTime.now():
             next_update_info_datetime += TimeDelta(days=7)
             Thread(name="Bithumb_Update_Coin_Info", target=bh.SyncWeeklyInfo).start()
             Thread(name="KoreaInvest_Update_Stock_Info", target=ki.SyncWeeklyInfo).start()

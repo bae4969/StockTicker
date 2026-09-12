@@ -1,3 +1,4 @@
+from core import config
 from core import util
 from datetime import datetime as DateTime
 from threading import Thread
@@ -280,7 +281,9 @@ class ApiKoreaInvestType:
         # 프로세스가 재시작되면 메모리 기준점이 사라진다. 그대로 두면 조회가 돌려주는 과거 구간을
         # 통째로 다시 넣어 같은 시각이 중복 행으로 쌓이므로, DB 에 남은 마지막 시각을 기준으로 삼는다.
         try:
-            cursor = self.__sql.execute_sync(f"SELECT MAX(execution_datetime) FROM tick.{quote_id}")
+            cursor = self.__sql.execute_sync(
+                f"SELECT MAX(execution_datetime) FROM {config.SQL_TICK_DB}.{quote_id}"
+            )
             row = cursor.fetchone()
             if row is not None and row[0] is not None:
                 return row[0]

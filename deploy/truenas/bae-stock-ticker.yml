@@ -1,0 +1,35 @@
+networks:
+  db_bridge:
+    external: true
+
+services:
+  bae-stock-ticker:
+    image: 127.0.0.1:5000/bae-stock-ticker:__VERSION__@__DIGEST__
+    container_name: bae-stock-ticker
+    command: python3 main.py
+    working_dir: /workspace
+    user: "1000:3000"
+    environment:
+      TZ: Asia/Seoul
+    volumes:
+      # 코드는 이미지 안에 있다. 설정·토큰 캐시만 호스트에서 가져온다.
+      - /mnt/nvme/90.service/stockticker_data/config:/workspace/config
+      - /mnt/nvme/90.service/share_data:/mnt/share_data
+    networks:
+      - db_bridge
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "4"
+          memory: 4G
+    logging:
+      # mode: non-blocking 이 중요하다 — logsink 가 느리면 blocking 에서는
+      # 로그를 찍는 스레드(=수집 스레드)가 그대로 멈춘다.
+      driver: syslog
+      options:
+        max-buffer-size: 4m
+        mode: non-blocking
+        syslog-address: udp://127.0.0.1:5514
+        syslog-format: rfc5424micro
+        tag: "{{.Name}}"

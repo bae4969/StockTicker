@@ -120,6 +120,10 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
 
 #### 핵심 사실 — 무엇이 수집을 끊는가
 
+⚠️ **2026-09-12 이미지 배포로 전환 중이다.** 아래는 **컷오버 전**의 사실이라 지금은 그대로
+유효하다. 컷오버 뒤에는 이 디렉토리가 라이브가 아니게 되고(코드는 이미지 안), 반영은
+`apply` 워크플로를 사람이 눌러야 일어난다 → [deploy-cicd](.agents/memory/deploy-cicd.md).
+
 이 디렉토리는 실행 중인 컨테이너에 bind mount 되어 있다. 그래서:
 
 | 행위 | 수집 영향 |
@@ -198,9 +202,39 @@ Python 3.11 (Dockerfile 기준). 외부 패키지는 `docker/requirements.txt`�
 "이 작업이 수집을 멈출 수 있나?"가 조금이라도 걸리면 **멈추고 묻는다.** 이 프로젝트에서
 잘못된 재시작 한 번의 비용은, 한 번 더 물어보는 비용보다 항상 크다.
 
+### release — 운영에 올릴 때 — 머지는 이미지까지, 반영은 사람이 누른다
+
+**`main` 머지는 배포가 아니다.** 머지는 릴리스 태그와 이미지 push 까지만 하고(수집 영향 0),
+운영 적용(=컨테이너 재생성)은 Actions 의 `apply` 를 **사람이 눌러야** 일어난다.
+
+**Why** — 여기서 재시작 한 번은 2~4분치 체결 데이터 영구 손실이다. 블로그처럼 "머지=배포"로
+두면 머지 시점이 곧 공백 시점이 된다. 그래서 파이프라인을 두 토막으로 끊어 두었다.
+구성·경로·키 같은 실측 사실은 [deploy-cicd](.agents/memory/deploy-cicd.md) 에 있다.
+
+**How to apply**
+
+```
+작업 → dev 커밋·푸시(아무것도 안 돈다) → (반복)
+                                      ↓  사용자가 "올리자" 할 때
+        VERSION 올림 → 토픽 브랜치 push(quality-check) → PR 링크 전달 → 사용자가 머지
+                                      ↓  릴리스 + 이미지 push (운영은 옛 이미지 그대로)
+        사용자가 한산한 창에 Actions → Run workflow → apply (재시작 1회)
+```
+
+1. **기본은 `dev` 에 쌓는 것이다.** `dev` 푸시는 아무것도 트리거하지 않는다.
+2. **올리기로 했으면 `VERSION` 을 올린다**(semver 한 줄). CI 는 안 올려준다 — 같은 태그가
+   이미 있으면 `create-release` 가 **실패**한다(지우고 다시 만들지 않는다).
+   patch=버그·문구 / minor=기능 추가·제거 / major=스키마·구조 변경. 애매하면 사용자에게 묻는다.
+3. **`main` 은 토픽 브랜치로만 들어간다**(`chore/*`·`fix/*`·`release/*`). 이 환경엔 `gh` 도
+   토큰도 없어 **PR 생성·머지는 사람 몫**이다 — compare 링크를 건네고 멈춘다.
+4. **`apply` 는 에이전트가 돌리지 않는다.** 시점은 사용자가 정한다. 국내장·미국장이 모두
+   한산한 창(주말 또는 06:00~08:00 KST)을 권하고, 빗썸은 24시간이라 완전 무손실 창은 없다고 말한다.
+5. 적용 뒤 확인은 로그로 한다 — `Initial subscriptions sent`. "Up" 은 "수집 중"이 아니다.
+
 ## 메모리 인덱스
 
 - [runtime-topology](.agents/memory/runtime-topology.md) — **이 디렉토리가 곧 라이브**: 컨테이너 `bae-stock-ticker` 의 bind mount·재시작 시 1~2분 수집 공백(실측)·logsink 로그 조회·midclt 로 앱 설정 바꾸는 법·배포가 재시작하지 않는다는 사실·한투 테스트 키 보관 위치(`KI_TEST_API_KEY`, 수집 미사용)
+- [deploy-cicd](.agents/memory/deploy-cicd.md) — **머지=배포가 아니다**: 러너·레지스트리·제한 SSH 키 구성, `apply` 만 재시작한다는 것, 컷오버 때 토큰 캐시를 함께 옮겨야 하는 이유
 - [project-intent](.agents/memory/project-intent.md) — StockTicker 프로젝트 의도·디렉토리·외부 의존성·자주 쓰는 명령·실행/검증/배포 방법
 - [kis-quote-api](.agents/memory/kis-quote-api.md) — 한투 지수·환율 API: TR ID·종목코드 체계·마스터 파일 구조 + 함정(해외지수 실시간 WS 없음, 다우 미제공, rt_cd=0인데 무효, mst 바이트 고정폭, REST 20건/초 공유 리미터)
 - [stock-categories](.agents/memory/stock-categories.md) — **DB·블로그·티커 적용 완료**. `stock_info` 백필·테스트 키 격리 검증·재구독 결과와 마스터 분류 규칙

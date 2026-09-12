@@ -42,13 +42,14 @@ def _stock_entries(
     mask,
     category_column: str | None = None,
     category_names: dict | None = None,
+    fallback_category_column: str | None = None,
     overseas: bool = False,
 ) -> list:
     """마스터 행을 `(종목코드, 카테고리코드, 카테고리명)`으로 줄인다.
 
     ETF·ETN은 회사 업종이 없으므로 상품 종류 자체를 카테고리로 쓴다. 국내 주식은
-    지수업종 대분류 4자리와 idxcode.mst 이름을, 미국 주식은 업종분류코드 3자리의
-    첫 자리(10개 대분류)를 쓴다. `000`·`0000`은 분류가 아니라 전체/미지정 값이다.
+    지수업종 중분류를 우선하고 값이 없으면 대분류로 돌아간다. 미국 주식은 업종분류코드
+    3자리의 첫 자리(10개 대분류)를 쓴다. `000`·`0000`은 분류가 아니라 전체/미지정 값이다.
     """
     result = []
     for _, row in df[mask].iterrows():
@@ -63,16 +64,16 @@ def _stock_entries(
             continue
 
         raw_code = _master_code(row[category_column], 3 if overseas else 4)
-        if raw_code in ("", "000", "0000"):
-            result.append((symbol, "", ""))
-            continue
-
         if overseas:
-            category_code = raw_code[0]
+            category_code = "" if raw_code in ("", "000") else raw_code[0]
             category_name = EX_STOCK_CATEGORY_NAMES.get(category_code, "")
         else:
-            category_code = raw_code
+            category_code = "" if raw_code in ("", "0000") else raw_code
             category_name = (category_names or {}).get(category_code, "")
+            if not category_name and fallback_category_column:
+                fallback_code = _master_code(row[fallback_category_column], 4)
+                category_code = "" if fallback_code in ("", "0000") else fallback_code
+                category_name = (category_names or {}).get(category_code, "")
         result.append((symbol, category_code, category_name))
 
     return result
@@ -181,7 +182,8 @@ def get_kospi_stock_list(category_names: dict | None = None) -> dict:
     return {
         "STOCK": _stock_entries(
             df, "STOCK", (df["그룹코드"] == "ST") | (df["그룹코드"] == "RT"),
-            "지수업종대분류", category_names,
+            "지수업종중분류", category_names,
+            fallback_category_column="지수업종대분류",
         ),
         "ETF": _stock_entries(df, "ETF", df["그룹코드"] == "EF"),
         "ETN": _stock_entries(df, "ETN", df["그룹코드"] == "EN"),
@@ -228,7 +230,8 @@ def get_kosdaq_stock_list(category_names: dict | None = None) -> dict:
     return {
         "STOCK": _stock_entries(
             df, "STOCK", (df["그룹코드"] == "ST") | (df["그룹코드"] == "RT"),
-            "지수업종 대분류 코드", category_names,
+            "지수 업종 중분류 코드", category_names,
+            fallback_category_column="지수업종 대분류 코드",
         ),
         "ETF": _stock_entries(df, "ETF", df["그룹코드"] == "EF"),
         "ETN": _stock_entries(df, "ETN", df["그룹코드"] == "EN"),

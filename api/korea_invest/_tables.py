@@ -1,4 +1,5 @@
 from datetime import datetime as DateTime
+from core import config
 
 
 def create_stock_info_table(sql_client) -> None:
@@ -116,11 +117,11 @@ def enqueue_update_quote_info(sql_client, sql_main_db: str, quote_info_dict: dic
 def create_quote_execution_tables(sql_client, quote_id: str, year: int) -> None:
     # 주식 체결 테이블과 동일한 스키마를 쓴다. 지수·환율은 매수/매도 구분이 없어
     # 거래량은 execution_non_volume 한 곳에만 담는다.
-    tick_table_name = f"tick.{quote_id}"
-    candle_table_name = f"candle.{quote_id}"
+    tick_table_name = f"{config.SQL_TICK_DB}.{quote_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{quote_id}"
 
-    create_tick_db_query = "CREATE DATABASE IF NOT EXISTS tick CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
-    create_candle_db_query = "CREATE DATABASE IF NOT EXISTS candle CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_tick_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_TICK_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_candle_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_CANDLE_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
 
     create_tick_table_query = (
         f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
@@ -169,20 +170,23 @@ def create_quote_execution_tables(sql_client, quote_id: str, year: int) -> None:
     check_query = (
         "SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.PARTITIONS "
         "WHERE PARTITION_NAME = %s AND ("
-        "(TABLE_SCHEMA = 'tick' AND TABLE_NAME = %s) OR "
-        "(TABLE_SCHEMA = 'candle' AND TABLE_NAME = %s))"
+        "(TABLE_SCHEMA = %s AND TABLE_NAME = %s) OR "
+        "(TABLE_SCHEMA = %s AND TABLE_NAME = %s))"
     )
-    cursor = sql_client.execute_sync(check_query, (partition_name, quote_id, quote_id))
+    cursor = sql_client.execute_sync(
+        check_query,
+        (partition_name, config.SQL_TICK_DB, quote_id, config.SQL_CANDLE_DB, quote_id),
+    )
     if cursor is None:
         existing = set()
     else:
         existing = {(r[0], r[1]) for r in cursor.fetchall()}
 
-    if ("tick", quote_id) not in existing:
+    if (config.SQL_TICK_DB, quote_id) not in existing:
         sql_client.execute_sync(
             f"ALTER TABLE {tick_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
-    if ("candle", quote_id) not in existing:
+    if (config.SQL_CANDLE_DB, quote_id) not in existing:
         sql_client.execute_sync(
             f"ALTER TABLE {candle_table_name} REORGANIZE PARTITION pmax INTO ({reorganize_partitions})"
         )
@@ -190,8 +194,8 @@ def create_quote_execution_tables(sql_client, quote_id: str, year: int) -> None:
 
 def enqueue_update_quote_execution(sql_client, quote_id: str, dt: DateTime, price: float, volume: float) -> None:
     # 지수·환율은 매수/매도 구분이 없으므로 ask/bid 는 0 으로 두고 non 만 채운다.
-    raw_table_name = f"tick.{quote_id}"
-    candle_table_name = f"candle.{quote_id}"
+    raw_table_name = f"{config.SQL_TICK_DB}.{quote_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{quote_id}"
 
     datetime_00_min = dt
     datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)
@@ -226,11 +230,11 @@ def enqueue_update_quote_execution(sql_client, quote_id: str, dt: DateTime, pric
 
 def create_stock_execution_tables(sql_client, stock_code: str, year: int):
     stock_id = "s" + stock_code.replace("/", "_")
-    tick_table_name = f"tick.{stock_id}"
-    candle_table_name = f"candle.{stock_id}"
+    tick_table_name = f"{config.SQL_TICK_DB}.{stock_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{stock_id}"
 
-    create_tick_db_query = "CREATE DATABASE IF NOT EXISTS tick CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
-    create_candle_db_query = "CREATE DATABASE IF NOT EXISTS candle CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_tick_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_TICK_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
+    create_candle_db_query = f"CREATE DATABASE IF NOT EXISTS {config.SQL_CANDLE_DB} CHARACTER SET='utf8mb4' COLLATE='utf8mb4_general_ci'"
 
     create_tick_table_query = (
         f"""CREATE TABLE IF NOT EXISTS {tick_table_name} (
@@ -355,8 +359,8 @@ def enqueue_update_stock_execution(
     bid_volume: float,
 ) -> None:
     stock_id = "s" + stock_code.replace("/", "_")
-    raw_table_name = f"tick.{stock_id}"
-    candle_table_name = f"candle.{stock_id}"
+    raw_table_name = f"{config.SQL_TICK_DB}.{stock_id}"
+    candle_table_name = f"{config.SQL_CANDLE_DB}.{stock_id}"
 
     datetime_00_min = dt
     datetime_10_min = dt.replace(minute=dt.minute // 10 * 10, second=0)

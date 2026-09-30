@@ -1,0 +1,70 @@
+networks:
+  test_net:
+
+services:
+  database:
+    image: mariadb:12.1.2@sha256:e487701b1f7e3f47319fe005b417c72becb67824a58b7bd35c6505f070f66dcd
+    container_name: bae-stock-ticker-test-db
+    env_file:
+      - /mnt/nvme/90.service/stockticker_test_data/db.env
+    environment:
+      TZ: Asia/Seoul
+    volumes:
+      - /mnt/nvme/90.service/stockticker_test_data/mariadb:/var/lib/mysql
+      - /mnt/nvme/10.project/23.stock_ticker/deploy/truenas/bae-stock-ticker-test-init.sql:/docker-entrypoint-initdb.d/001-test-schemas.sql:ro
+    networks:
+      - test_net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - healthcheck.sh
+        - --connect
+        - --innodb_initialized
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+    logging:
+      driver: syslog
+      options:
+        max-buffer-size: 4m
+        mode: non-blocking
+        syslog-address: udp://127.0.0.1:5514
+        syslog-format: rfc5424micro
+        tag: "{{.Name}}"
+
+  bae-stock-ticker-test:
+    image: 127.0.0.1:5000/bae-stock-ticker:v1.0.1@sha256:fe99c27c68d521cec4a92ad49fd563ef3bc99e2c1eeb25b17a532cf1ff06a28e
+    container_name: bae-stock-ticker-test
+    command: python3 main.py
+    working_dir: /workspace
+    user: "1000:3000"
+    environment:
+      TZ: Asia/Seoul
+    volumes:
+      - /mnt/nvme/10.project/23.stock_ticker:/workspace
+    networks:
+      - test_net
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+    logging:
+      driver: syslog
+      options:
+        max-buffer-size: 4m
+        mode: non-blocking
+        syslog-address: udp://127.0.0.1:5514
+        syslog-format: rfc5424micro
+        tag: "{{.Name}}"

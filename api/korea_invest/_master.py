@@ -107,9 +107,10 @@ def get_kr_index_list() -> list:
 
 def get_overseas_index_fx_list() -> tuple:
     # frgn_code.mst — 해외지수·환율 카탈로그. [구분코드 1B][심볼 10B][영문명][한글명]
-    #   구분코드 P = 해외지수, X = 환율. X 행은 한글명 시작 위치가 다르다.
+    #   구분코드 P = 해외지수(미국), W = 세계지수, X = 환율. X 행은 한글명 시작 위치가 다르다.
+    #   W 의 KOSPI 는 국내지수 저장 이름(KOSPI)과 겹치므로 뺀다.
     #   X 행은 '영문명' 자리에 한글 국가명이 들어간다.
-    # 반환: ([(심볼, 한글명, 영문명), ...] 지수, [(심볼, 통화쌍명, 국가명), ...] 환율)
+    # 반환: ([(심볼, 한글명, 영문명), ...] 해외지수, [(심볼, 한글명, 영문명), ...] 세계지수, [(심볼, 통화쌍명, 국가명), ...] 환율)
     ssl._create_default_https_context = ssl._create_unverified_context
     urllib.request.urlretrieve("https://new.real.download.dws.co.kr/common/master/frgn_code.mst.zip", "./temp/frgn_code.mst.zip")
 
@@ -118,6 +119,7 @@ def get_overseas_index_fx_list() -> tuple:
     frgn_zip.close()
 
     index_list = []
+    world_index_list = []
     fx_list = []
     with open("./temp/frgn_code.mst", mode="rb") as f:
         for raw_row in f:
@@ -133,13 +135,13 @@ def get_overseas_index_fx_list() -> tuple:
                 if pair_name:
                     fx_list.append((symbol, pair_name, country))
 
-            elif div_code == "P":
+            elif div_code == "P" or (div_code == "W" and symbol != "KOSPI"):
                 name_en = raw_row[11:50].decode("cp949", errors="ignore").strip()
                 name_kr = raw_row[50:75].decode("cp949", errors="ignore").strip()
                 if name_kr:
-                    index_list.append((symbol, name_kr, name_en))
+                    (index_list if div_code == "P" else world_index_list).append((symbol, name_kr, name_en))
 
-    return index_list, fx_list
+    return index_list, world_index_list, fx_list
 
 
 def get_kospi_stock_list(category_names: dict | None = None) -> dict:

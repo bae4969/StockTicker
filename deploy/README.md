@@ -59,3 +59,17 @@ Runner 와 Actions artifact 저장소는 쓰지 않는다.
 | 컨테이너는 떠 있는데 재구독 로그가 안 옴 | **경고만** — 판단은 사람이 한다 |
 
 수동 롤백은 이전 버전 태그로 `apply` 를 다시 돌린다(재시작 1회 추가).
+
+## 작업본 테스트 앱
+
+`bae-stock-ticker-test`는 운영 배포 워크플로와 분리된 TrueNAS Custom App이다. 레지스트리의
+릴리스 이미지를 실행 기반으로 사용하되 `/mnt/nvme/10.project/23.stock_ticker`를 `/workspace`에
+바인드 마운트한다. `deploy/truenas/bae-stock-ticker-test.yml`은 수집기와 소형 MariaDB를 함께
+띄운다. MariaDB는 앱 전용 네트워크에만 붙고 포트를 공개하지 않으며, 데이터와 `db.env`는 저장소 밖
+`/mnt/nvme/90.service/stockticker_test_data/`에 둔다. 작업본의 gitignored `config/settings.json`은
+테스트 키 1개와 `BithumbTest`·`KoreaInvestTest`·`tickTest`·`candleTest`를 사용한다.
+
+테스트 앱은 평소 `STOPPED`로 두고 변경을 모아 한 번만 기동한다. 시작할 때마다 한투 승인키를
+발급하므로 반복 재시작하지 않는다. 운영 `apply`와 제한 SSH 키는 이 앱을 갱신할 권한이 없다.
+TrueNAS에서 앱을 중지하면 두 테스트 컨테이너가 제거되므로 과거 로그는 중앙 logsink의
+`bae-stock-ticker-test`·`bae-stock-ticker-test-db` 서비스에서 확인한다.

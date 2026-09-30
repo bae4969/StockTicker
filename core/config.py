@@ -29,8 +29,11 @@ SQL_CHARSET = _CONFIG["SQL_CHARSET"]
 SQL_LOG_DB = _CONFIG["SQL_LOG_DB"]
 SQL_BH_DB = _CONFIG["SQL_BH_DB"]
 SQL_KI_DB = _CONFIG["SQL_KI_DB"]
+SQL_TICK_DB = _CONFIG.get("SQL_TICK_DB", "tick")
+SQL_CANDLE_DB = _CONFIG.get("SQL_CANDLE_DB", "candle")
 
 KI_API_KEY_LIST = _CONFIG["KI_API_KEY_LIST"]
+ENABLE_WEEKLY_SYNC = _CONFIG.get("ENABLE_WEEKLY_SYNC", True)
 
 
 # ============================================================================

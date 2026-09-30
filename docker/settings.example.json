@@ -8,6 +8,10 @@
     "SQL_LOG_DB": "Log",
     "SQL_BH_DB": "Bithumb",
     "SQL_KI_DB": "KoreaInvest",
+    "SQL_TICK_DB": "tick",
+    "SQL_CANDLE_DB": "candle",
+
+    "ENABLE_WEEKLY_SYNC": true,
 
     "KI_API_KEY_LIST": [
         {

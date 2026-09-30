@@ -1,3 +1,4 @@
+from core import config
 from core import util
 from datetime import datetime as DateTime
 from threading import Thread
@@ -148,7 +149,7 @@ class ApiKoreaInvestType:
                     'quote_category': "KR_INDEX",
                 })
 
-            ex_index_list, fx_list = master.get_overseas_index_fx_list()
+            ex_index_list, world_index_list, fx_list = master.get_overseas_index_fx_list()
 
             for symbol, name_kr, name_en in ex_index_list:
                 tables.enqueue_update_quote_info(self.__sql, self.__sql_main_db, {
@@ -157,6 +158,16 @@ class ApiKoreaInvestType:
                     'quote_name_kr': name_kr,
                     'quote_name_en': name_en,
                     'quote_category': "EX_INDEX",
+                })
+
+            for symbol, name_kr, name_en in world_index_list:
+                tables.enqueue_update_quote_info(self.__sql, self.__sql_main_db, {
+                    # 세계지수 코드에는 '#' 이 들어 있어 그대로는 테이블명·식별자로 쓸 수 없다.
+                    'quote_code': symbol.replace("#", ""),
+                    'quote_api_code': symbol,
+                    'quote_name_kr': name_kr,
+                    'quote_name_en': name_en,
+                    'quote_category': "WORLD_INDEX",
                 })
 
             for symbol, pair_name, country in fx_list:
@@ -171,7 +182,7 @@ class ApiKoreaInvestType:
 
             util.InsertLog(
                 "ApiKoreaInvest", "N",
-                f"Success to update quote info [ kr_index={len(kr_index_list)} | ex_index={len(ex_index_list)} | fx={len(fx_list)} ]"
+                f"Success to update quote info [ kr_index={len(kr_index_list)} | ex_index={len(ex_index_list)} | world_index={len(world_index_list)} | fx={len(fx_list)} ]"
             )
 
         except Exception as e:
@@ -206,6 +217,12 @@ class ApiKoreaInvestType:
             if hour_min <= 630:
                 return 1 <= weekday <= 5
             return False
+
+        if query_type == "INDEX_WORLD":
+            # 시장마다 장 시간이 달라 월 00:00 ~ 토 06:30 연속으로 돈다 (토요일 새벽은 미주 금요일 장).
+            if weekday == 5:
+                return hour_min <= 630
+            return weekday <= 4
 
         if query_type == "FX":
             # 월 06:00 ~ 토 06:00 연속.
@@ -244,7 +261,7 @@ class ApiKoreaInvestType:
                     quote_id = "i" + quote_query
                     self.__store_quote_rows(quote_id, self.__rest.kr_index_tick_list(token_header, api_code))
 
-                elif query_type == "INDEX_EX":
+                elif query_type in ("INDEX_EX", "INDEX_WORLD"):
                     quote_id = "i" + quote_query
                     candle_list = self.__rest.ex_index_candle_list(token_header, api_code)
                     self.__store_quote_rows(quote_id, [(dt, close, volume) for dt, close, _o, _h, _l, volume in candle_list])
@@ -280,7 +297,9 @@ class ApiKoreaInvestType:
         # 프로세스가 재시작되면 메모리 기준점이 사라진다. 그대로 두면 조회가 돌려주는 과거 구간을
         # 통째로 다시 넣어 같은 시각이 중복 행으로 쌓이므로, DB 에 남은 마지막 시각을 기준으로 삼는다.
         try:
-            cursor = self.__sql.execute_sync(f"SELECT MAX(execution_datetime) FROM tick.{quote_id}")
+            cursor = self.__sql.execute_sync(
+                f"SELECT MAX(execution_datetime) FROM {config.SQL_TICK_DB}.{quote_id}"
+            )
             row = cursor.fetchone()
             if row is not None and row[0] is not None:
                 return row[0]

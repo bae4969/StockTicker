@@ -105,6 +105,10 @@ def get_kr_index_list() -> list:
     return result_list
 
 
+# 마스터에는 있지만 시세가 0 으로만 오는 죽은 지수. 카탈로그에 올리면 켰을 때 매분 실패 로그만 쌓인다.
+_DEAD_INDEX_SYMBOLS = ("JPN", "CL#IGPA")
+
+
 def get_overseas_index_fx_list() -> tuple:
     # frgn_code.mst — 해외지수·환율 카탈로그. [구분코드 1B][심볼 10B][영문명][한글명]
     #   구분코드 P = 해외지수(미국), W = 세계지수, X = 환율. X 행은 한글명 시작 위치가 다르다.
@@ -134,6 +138,9 @@ def get_overseas_index_fx_list() -> tuple:
                 pair_name = raw_row[40:80].decode("cp949", errors="ignore").strip()
                 if pair_name:
                     fx_list.append((symbol, pair_name, country))
+
+            elif symbol in _DEAD_INDEX_SYMBOLS:
+                continue
 
             elif div_code == "P" or (div_code == "W" and symbol != "KOSPI"):
                 name_en = raw_row[11:50].decode("cp949", errors="ignore").strip()

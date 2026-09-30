@@ -27,7 +27,9 @@ ki = API_KI(
     config.KI_API_KEY_LIST,
 )
 
-next_update_info_datetime = DateTime.now().replace(hour=8, minute=0, second=0, microsecond=0)
+# 주간 싱크는 일요일 06:00 에 시작한다. 한투 해외 종목정보 조회가 일요일 09:00 부터 전부 거부돼,
+# 08:00 에 시작하면 70분쯤 걸리는 싱크의 꼬리(AMEX)가 매주 잘렸다.
+next_update_info_datetime = DateTime.now().replace(hour=6, minute=0, second=0, microsecond=0)
 days_until_sunday = (6 - next_update_info_datetime.weekday()) % 7
 next_update_info_datetime += TimeDelta(days=days_until_sunday)
 if next_update_info_datetime <= DateTime.now():

@@ -253,7 +253,7 @@ class KoreaInvestRestClient:
 
             rep_json = json.loads(response.text)
             if int(rep_json["rt_cd"]) != 0:
-                raise Exception("Recv Code")
+                raise Exception(f"Recv Code [ {rep_json.get('msg1', '')} ]")
 
             rep_stock_info = rep_json["output"]
             stock_price = util.TryParseFloat(rep_stock_info["thdt_clpr"])
@@ -302,7 +302,7 @@ class KoreaInvestRestClient:
             )
 
             rep_json = json.loads(response.text)
-            if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code 1")
+            if int(rep_json["rt_cd"]) != 0: raise Exception(f"Recv Code 1 [ {rep_json.get('msg1', '')} ]")
 
             rep_stock_info1 = rep_json["output"]
 
@@ -336,7 +336,7 @@ class KoreaInvestRestClient:
             )
 
             rep_json = json.loads(response.text)
-            if int(rep_json["rt_cd"]) != 0: raise Exception("Recv Code 2")
+            if int(rep_json["rt_cd"]) != 0: raise Exception(f"Recv Code 2 [ {rep_json.get('msg1', '')} ]")
 
             rep_stock_info2 = rep_json["output"]
 

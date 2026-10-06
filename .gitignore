@@ -6,3 +6,8 @@ temp/
 *.dat
 *.out
 *.log
+CLAUDE.md
+AGENTS.md
+.claude
+.agents/
+.codex/hooks.json

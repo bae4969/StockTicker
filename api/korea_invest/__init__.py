@@ -15,6 +15,9 @@ from . import _master as master
 
 class ApiKoreaInvestType:
     __QUOTE_POLL_INTERVAL_SEC: int = 60
+    # 분봉을 주지 않아 조회 시점 현재값(KST)을 저장하는 지수. 장이 KST 하루 안에 열리고 닫혀야 한다 —
+    # 블로그 등락률이 마지막 캔들 날짜로 거래일을 가르므로, 장이 KST 자정을 넘는 유럽·미주 지수는 넣지 않는다.
+    __QUOTE_SNAPSHOT_SET: tuple = ("INBOMBAY",)
 
     def __init__(self, sql_host: str, sql_port: int, sql_id: str, sql_pw: str, sql_db: str, sql_charset: str, api_key_list: list):
         self.__sql_main_db = sql_db
@@ -35,6 +38,7 @@ class ApiKoreaInvestType:
         self.__quote_keep_polling = True
         self.__quote_query_list: list = []
         self.__quote_last_stored_dict: dict = {}
+        self.__quote_last_price_dict: dict = {}
         self.__quote_thread = Thread(name="KoreaInvest_Quote_Polling", target=self.__run_quote_polling)
         self.__quote_thread.daemon = True
         self.__quote_thread.start()
@@ -263,7 +267,10 @@ class ApiKoreaInvestType:
 
                 elif query_type in ("INDEX_EX", "INDEX_WORLD"):
                     quote_id = "i" + quote_query
-                    candle_list = self.__rest.ex_index_candle_list(token_header, api_code)
+                    candle_list, current_price = self.__rest.ex_index_candle_list(token_header, api_code)
+                    if quote_query in self.__QUOTE_SNAPSHOT_SET:
+                        self.__store_quote_snapshot(quote_id, now.replace(microsecond=0), current_price)
+                        continue
                     self.__store_quote_rows(quote_id, [(dt, close, volume) for dt, close, _o, _h, _l, volume in candle_list])
 
                 elif query_type == "FX":
@@ -321,6 +328,30 @@ class ApiKoreaInvestType:
             tables.enqueue_update_quote_execution(self.__sql, quote_id, dt, price, volume)
 
         self.__quote_last_stored_dict[quote_id] = max(row[0] for row in new_row_list)
+
+    def __store_quote_snapshot(self, quote_id: str, dt: DateTime, price: float) -> None:
+        # 현재값은 장이 닫혀도 매번 같은 값으로 온다. 매분 넣으면 KST 자정에 새 날짜 행이 생겨
+        # 블로그 등락률이 장 열릴 때까지 0% 가 되므로, 직전 저장값과 다를 때만 넣는다.
+        # 재시작 직후에도 같은 값을 다시 넣지 않게 직전값은 DB 의 마지막 행에서 읽는다.
+        if quote_id not in self.__quote_last_price_dict:
+            self.__quote_last_price_dict[quote_id] = self.__get_quote_last_price(quote_id)
+        if price <= 0 or price == self.__quote_last_price_dict[quote_id]:
+            return
+
+        tables.enqueue_update_quote_execution(self.__sql, quote_id, dt, price, 0.0)
+        self.__quote_last_price_dict[quote_id] = price
+
+    def __get_quote_last_price(self, quote_id: str) -> float:
+        try:
+            cursor = self.__sql.execute_sync(
+                f"SELECT execution_price FROM {config.SQL_TICK_DB}.{quote_id} ORDER BY execution_datetime DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return float(row[0])
+        except Exception as e:
+            util.InsertLog("ApiKoreaInvest", "E", f"Fail to read last stored price [ {quote_id} | {e.__str__()} ]")
+        return 0.0
 
     def __run_quote_polling(self) -> None:
         while self.__quote_keep_polling:

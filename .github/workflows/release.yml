@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '적용할 버전 (예: v1.0.0). 비우면 VERSION 파일의 값을 쓴다'
+        description: '적용할 버전 (예: v1.0.0). 비우면 최신 릴리스를 쓴다'
         required: false
         default: ''
 
@@ -135,24 +135,28 @@ jobs:
         with:
           fetch-depth: 0
 
+      # 버전은 자동으로 정한다 — 마지막 릴리스 태그의 patch +1.
+      # VERSION 파일은 minor·major 를 올릴 때만 손댄다: 그 값이 마지막 태그보다 크면 그 값을 쓴다.
       - name: Extract version
         id: get_version
-        run: echo "VERSION=v$(tr -d ' \t\n\r' < VERSION)" >> "$GITHUB_OUTPUT"
-
-      # 같은 버전을 다시 쓰면 이전 릴리스 이력이 사라진다. 삭제 후 재생성하지 않고 실패시킨다.
-      - name: Check version is new
         run: |
-          TAG="${{ steps.get_version.outputs.VERSION }}"
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            echo "::error::이미 존재하는 버전이다: $TAG (VERSION 파일을 올릴 것)"
-            exit 1
+          set -euo pipefail
+          LATEST=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          FLOOR="v$(tr -d ' \t\n\r' < VERSION)"
+          if [ -z "$LATEST" ] || [ "$(printf '%s\n%s\n' "$LATEST" "$FLOOR" | sort -V | tail -n 1)" != "$LATEST" ]; then
+            NEXT="$FLOOR"
+          else
+            IFS=. read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
+            NEXT="v$MAJOR.$MINOR.$((PATCH + 1))"
           fi
+          echo "마지막 태그 ${LATEST:-없음} → 이번 버전 $NEXT"
+          echo "VERSION=$NEXT" >> "$GITHUB_OUTPUT"
 
       - name: Build release notes from commit history
         run: |
           set -e
           CURRENT_TAG="${{ steps.get_version.outputs.VERSION }}"
-          PREV_TAG=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n 1 || true)
+          PREV_TAG=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vx "$CURRENT_TAG" | sort -V | tail -n 1 || true)
           {
             echo "## Full Commit List"
             if [ -n "$PREV_TAG" ]; then
@@ -237,13 +241,15 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Resolve version and digest
         run: |
           set -euo pipefail
           VERSION="${{ github.event.inputs.version }}"
           if [ -z "$VERSION" ]; then
-            VERSION="v$(tr -d ' \t\n\r' < VERSION)"
+            VERSION=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
           fi
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::버전 형식이 아니다: $VERSION"
@@ -268,11 +274,16 @@ jobs:
       # allowlist 로 검사한 뒤 bae-stock-ticker 하나에만 적용한다.
       - name: Apply TrueNAS compose
         run: |
-          set -euo pipefail
+          set -uo pipefail
           ssh -i ~/.ssh/deploy_stockticker -o BatchMode=yes -o ConnectTimeout=10 \
               "$DEPLOY_SSH_TARGET" \
               "deploy $VERSION $IMAGE_DIGEST" \
               < deploy/truenas/bae-stock-ticker.yml
+          rc=$?
+          if [ "$rc" -eq 127 ]; then
+            echo "::error::NAS 에 배포 스크립트가 없다 — 저장소의 deploy/nas/deploy-stockticker-image.sh 를 NAS 의 ~/bin/ 에 실행 권한으로 복사할 것 (운영은 그대로다)"
+          fi
+          exit "$rc"
 
       - name: Deployment complete
         run: |

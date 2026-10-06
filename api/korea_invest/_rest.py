@@ -397,8 +397,9 @@ class KoreaInvestRestClient:
         except Exception as e:
             raise Exception("[ kr index ][ %s ][ %s ]"%(index_code, e.__str__()))
 
-    def ex_index_candle_list(self, rest_api_token_header: dict, index_code: str) -> list:
-        # 해외지수 분봉. 최신순 [(DateTime(현지시각), 종가, 시가, 고가, 저가, 거래량), ...]
+    def ex_index_candle_list(self, rest_api_token_header: dict, index_code: str) -> tuple:
+        # 해외지수 분봉과 현재값. (최신순 [(DateTime(현지시각), 종가, 시가, 고가, 저가, 거래량), ...], 현재값)
+        # 현재값(output1)은 분봉(output2)을 주지 않는 지수(인도 SENSEX 등)를 위한 것이다.
         try:
             api_header = rest_api_token_header.copy()
             api_header["tr_id"] = "FHKST03030200"
@@ -437,7 +438,7 @@ class KoreaInvestRestClient:
                     util.TryParseFloat(row.get("cntg_vol")),
                 ))
 
-            return result_list
+            return result_list, util.TryParseFloat(rep_json["output1"].get("ovrs_nmix_prpr"))
 
         except Exception as e:
             raise Exception("[ ex index ][ %s ][ %s ]"%(index_code, e.__str__()))

@@ -10,10 +10,9 @@ Runner 와 Actions artifact 저장소는 쓰지 않는다.
 
 | 언제 | 무엇이 도나 | 수집 영향 |
 |---|---|---|
-| 토픽 브랜치(`release/*`·`fix/*`·`chore/*`) push | `quality-check` (문법·compose·이미지 빌드·이미지 내용 검사) | 없음 |
-| `main` push (=PR 머지) | 릴리스 생성 + 이미지 빌드·레지스트리 push | **없음** — 운영은 옛 이미지로 계속 돈다 |
+| `dev` push | `quality-check` (문법·compose·이미지 빌드·이미지 내용 검사) | 없음 |
+| `main` push (=dev → main PR 머지) | 릴리스 생성 + 이미지 빌드·레지스트리 push | **없음** — 운영은 옛 이미지로 계속 돈다 |
 | Actions → Run workflow (수동) | `apply` — TrueNAS 앱에 새 digest 적용 | **재시작 1회 (2~4분 공백)** |
-| `dev` push | 아무것도 안 함 | 없음 |
 
 즉 **언제 반영할지는 사람이 고른다.** 국내장·미국장이 모두 한산한 창에서 누른다.
 

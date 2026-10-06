@@ -1,15 +1,13 @@
-name: Topic Branch CI / Main Release / Manual Apply
+name: Dev CI / Main Release / Manual Apply
 
 on:
   push:
     branches:
       - main # PR 머지 — 릴리스와 이미지 push 까지만 한다(운영 재시작 없음)
       # 공개 저장소의 fork PR 코드를 내부 VM 에서 실행하지 않는다. PR 에 쓰는 저장소 내부
-      # 토픽 브랜치만 검사하고, 이 결과를 main ruleset 의 required check 로 묶는다.
-      # `dev` 푸시는 아무것도 트리거하지 않는다.
-      - 'release/**'
-      - 'fix/**'
-      - 'chore/**'
+      # `dev` 만 검사하고, 이 결과를 main ruleset 의 required check 로 묶는다(dev → main PR).
+      # `dev` 푸시는 quality-check 만 돈다 — 릴리스·이미지·운영 적용은 하지 않는다.
+      - dev
   # 운영 적용(=컨테이너 재시작)은 자동으로 하지 않는다. 이 서비스는 재시작 한 번이
   # 2~4분치 체결 데이터 영구 손실이라, 언제 반영할지는 사람이 고른다.
   workflow_dispatch:
@@ -34,7 +32,7 @@ env:
   DEPLOY_SSH_TARGET: ${{ vars.DEPLOY_SSH_TARGET }}
 
 jobs:
-  # 0단계: 기본 검증 (CI) — 토픽 브랜치와 main push 에서 돈다
+  # 0단계: 기본 검증 (CI) — dev 와 main push 에서 돈다
   quality-check:
     name: quality-check
     if: github.event_name == 'push'
